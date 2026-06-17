@@ -35,6 +35,14 @@ pub enum Screen {
 pub trait UiExt: Send {
     /// 扩展视图激活时的按键处理；可通过 `tx` 向下位机发送命令。
     fn on_key(&mut self, key: KeyEvent, tx: &Sender<TxCommand>);
+    /// 周期心跳：UI 事件循环每轮调用一次（约 10Hz，与渲染同频）。
+    ///
+    /// 提供一个**领域中立的墙钟节拍 + TX 通道**，供扩展驱动基于时间的状态机
+    /// （等待 / 随机等待 / 超时 / 按时序发命令）。与 `on_key` 不同，它不依赖
+    /// 用户输入或报文节奏，因而能在数据中断（如冷启动复位）时仍可靠推进。
+    /// **无论当前在主屏还是扩展屏都会被调用**（测试可在后台持续运行）。
+    /// 默认空实现，开源默认 bin 行为不变。
+    fn tick(&mut self, _tx: &Sender<TxCommand>) {}
     /// 渲染扩展视图（独占给定区域）。
     fn render(&self, frame: &mut Frame, area: Rect, state: &AppState);
     /// 顶栏状态片段（如"冷启动 3/10"）；返回 `None` 则不显示。

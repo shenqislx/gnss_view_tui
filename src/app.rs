@@ -121,6 +121,11 @@ impl App {
                 terminal.draw(|f| ui::render(f, self, &state))?;
             }
 
+            // 扩展心跳：每轮给扩展一个墙钟节拍（驱动其内部状态机）。
+            if let Some(ext) = &mut self.ext {
+                ext.tick(&self.cmd_tx);
+            }
+
             // 处理输入事件。
             if event::poll(Duration::from_millis(100))?
                 && let Event::Key(key) = event::read()?
@@ -319,11 +324,15 @@ mod tests {
     #[derive(Default)]
     struct DummyExt {
         keys: Arc<Mutex<Vec<KeyCode>>>,
+        ticks: Arc<Mutex<usize>>,
     }
 
     impl UiExt for DummyExt {
         fn on_key(&mut self, key: KeyEvent, _tx: &Sender<TxCommand>) {
             self.keys.lock().unwrap().push(key.code);
+        }
+        fn tick(&mut self, _tx: &Sender<TxCommand>) {
+            *self.ticks.lock().unwrap() += 1;
         }
         fn render(&self, _frame: &mut Frame, _area: Rect, _state: &AppState) {}
         fn header_status(&self) -> Option<String> {
@@ -375,7 +384,10 @@ mod tests {
     #[test]
     fn keys_route_to_ext_on_ext_screen() {
         let keys = Arc::new(Mutex::new(Vec::new()));
-        let ext = DummyExt { keys: keys.clone() };
+        let ext = DummyExt {
+            keys: keys.clone(),
+            ..Default::default()
+        };
         let mut app = make_app(Some(Box::new(ext)));
 
         // 主屏时按键不进扩展。
@@ -387,6 +399,22 @@ mod tests {
         app.on_key(key(KeyCode::Char('a')));
         app.on_key(key(KeyCode::Char('b')));
         assert_eq!(*keys.lock().unwrap(), vec![KeyCode::Char('a'), KeyCode::Char('b')]);
+    }
+
+    #[test]
+    fn tick_seam_is_callable_with_tx() {
+        // 验证 tick 接缝可注入并能通过 tx 通道发命令（心跳驱动状态机的基础）。
+        let ticks = Arc::new(Mutex::new(0usize));
+        let ext = DummyExt {
+            keys: Arc::new(Mutex::new(Vec::new())),
+            ticks: ticks.clone(),
+        };
+        let mut app = make_app(Some(Box::new(ext)));
+        if let Some(e) = &mut app.ext {
+            e.tick(&app.cmd_tx);
+            e.tick(&app.cmd_tx);
+        }
+        assert_eq!(*ticks.lock().unwrap(), 2);
     }
 
     #[test]
