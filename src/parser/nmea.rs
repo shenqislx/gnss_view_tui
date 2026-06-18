@@ -178,7 +178,9 @@ fn parse_gga(fields: &[&str], text: &str, out: &mut Vec<ParseEvent>) {
         utc: f(fields, 1),
         latitude: lat,
         longitude: lon,
-        fix_quality: fields.get(6).and_then(|s| s.parse::<u8>().ok()),
+        // 质量字段存在但为空（无定位时常见：$GNGGA,,,,,,,,..）按 0（无定位）处理，
+        // 而非 None——否则会与“字段缺失/未知”混淆，且会让下游保留上一次的陈旧质量。
+        fix_quality: fields.get(6).map(|s| s.trim().parse::<u8>().unwrap_or(0)),
         sats_used: parse_u(fields, 7),
         hdop: parse_f64(fields, 8),
         altitude: parse_f64(fields, 9),
@@ -293,6 +295,23 @@ mod tests {
         assert!((fix.0.unwrap() - 48.1173).abs() < 1e-3);
         assert!((fix.1.unwrap() - 11.5167).abs() < 1e-3);
         assert_eq!(fix.3, Some(8));
+    }
+
+    #[test]
+    fn empty_gga_quality_field_parses_as_zero() {
+        // 无定位历元：质量字段为空（真实模组日志 $GNGGA,,,,,,,,..）。
+        // 应解析为 Some(0)（无定位），而非 None，以免下游保留上次的陈旧质量。
+        let body = "GNGGA,,,,,,,,,,M,,M,,";
+        let cs = body.bytes().fold(0u8, |a, b| a ^ b);
+        let events = collect(&format!("${body}*{cs:02X}\r\n"));
+        let q = events
+            .iter()
+            .find_map(|e| match e {
+                ParseEvent::Fix { fix_quality, .. } => Some(*fix_quality),
+                _ => None,
+            })
+            .expect("应解析出 Fix");
+        assert_eq!(q, Some(0), "空质量字段应按无定位(0)处理");
     }
 
     #[test]
