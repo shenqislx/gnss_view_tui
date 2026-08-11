@@ -154,7 +154,7 @@ src/
 ├── ext.rs         扩展接缝：Screen / UiExt / EventObserver（供外部 crate 注入，默认不启用）
 ├── source.rs      数据来源线程：串口 / 回放 / 演示，产出原始数据块
 ├── pipeline.rs    数据管线：落盘 → 解析 → 归并进共享状态
-├── recorder.rs    原始数据落盘（.raw 原始流 + .meta.jsonl PC 时间戳）
+├── recorder.rs    原始数据落盘（.raw 原始流）
 ├── demo.rs        内置模拟数据生成器（NMEA 带正确校验和 + INFO->PROF 剖析行）
 ├── parser/
 │   ├── mod.rs     Parser trait + 事件定义 + 多协议分流（Auto）
@@ -180,10 +180,9 @@ src/
 
 ### 落盘格式
 
-每次实时会话在输出目录生成两个文件：
+每次实时会话在输出目录生成：
 
 - `gnss_<时间戳>.raw`：串口原始字节流，逐字节原样写入，可直接 `--replay`。
-- `gnss_<时间戳>.meta.jsonl`：每个数据块的 `{pc: PC接收时间, off: 字节偏移, len: 长度}`，与 `.raw` 配合即可同时还原接收机时间与 PC 接收时间。
 
 ### 自定义二进制协议帧格式（示例）
 

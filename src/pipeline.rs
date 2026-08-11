@@ -43,7 +43,7 @@ pub fn run(
     while let Ok(chunk) = rx.recv() {
         // 1) 落盘
         if let Some(rec) = recorder.as_mut()
-            && let Err(e) = rec.write(&chunk.data, chunk.pc_time)
+            && let Err(e) = rec.write(&chunk.data)
                 && let Ok(mut s) = state.lock() {
                     s.push_log(LogKind::Error, format!("落盘失败: {e}"));
                 }
