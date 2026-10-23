@@ -282,8 +282,9 @@ fn render_sat_summary(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 /// CN0 能量条：自适应**多行网格**，充分利用面板宽×高以容纳大量卫星
-/// （多星座可见可达 40+ 颗）。每格柱顶显示数值、柱底显示 PRN/仰角/方位；
-/// 在用卫星亮色显示且 PRN 绿色加粗，闲置卫星整体变暗。
+/// （多星座可见可达 40+ 颗）。柱高和柱顶数字表示 CN0，颜色不按强度分档，
+/// 避免把载噪比低的在用星看成未参与定位。参与定位为亮绿实心柱，未参与为同尺寸浅色块；
+/// 柱底显示 PRN/仰角/方位，在用卫星的 PRN 绿色加粗。
 /// 支持按星座筛选（`f`）与翻页（`←/→`）。
 fn render_cn0(frame: &mut Frame, area: Rect, state: &AppState) {
     let sats = state.filtered_satellites();
@@ -322,7 +323,7 @@ fn render_cn0(frame: &mut Frame, area: Rect, state: &AppState) {
     state.cn0_max_page.set(pages - 1);
 
     let title = format!(
-        " CN0 dB-Hz │ 滤:{} {}颗 第{}/{}页 │ f:星座 ←→翻页 ",
+        " CN0 dB-Hz │ 滤:{} {}颗 第{}/{}页 │ 实心=在用 浅色=未用 │ f:星座 ←→翻页 ",
         state.sat_filter.label(),
         total,
         page + 1,
@@ -362,7 +363,17 @@ fn render_cn0(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 }
 
+/// 柱体一行的填充程度。`eighth` 为 1..=7，对应八分块 ▁▂▃▄▅▆▇。
+enum BarRow {
+    Full,
+    Partial { eighth: usize },
+}
+
 /// 在 `(x0, y0)` 处绘制单颗卫星的 CN0 格：数值 / 柱体 / PRN·仰角·方位。
+///
+/// 柱高表示载噪比。在用为亮绿实心 `█`（顶段可用八分块）。
+/// 未用整柱只有浅灰 `░`，残量四舍五入成整格，不再另画一条深浅不同的顶边。
+/// 两者底边和列宽对齐。不再按 CN0 分色。
 fn draw_cn0_cell(
     buf: &mut Buffer,
     x0: u16,
@@ -372,46 +383,58 @@ fn draw_cn0_cell(
     label_lines: u16,
     s: &crate::model::Satellite,
 ) {
-    const LOWER: [char; 8] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇'];
     const MAX_CN0: f64 = 55.0;
 
     let sys = s.system.unwrap_or(GnssSystem::Unknown);
     let cn0 = s.cn0.unwrap_or(0);
-    let color = cn0_color(cn0);
     let used = s.used_in_fix;
     let inner_bar_w = slot_w.saturating_sub(1).max(1);
 
-    // 在用柱亮色加粗，闲置柱 DIM 变暗。
+    // 未用柱用浅灰 `░`，不用 `|+-`：后者是窄字符、笔画在格子正中，
+    // 和占满整格的 `█` 对不齐。`░` 与 `█` 同属方块字符，底边和列宽一致。
     let bar_style = if used {
-        Style::default().fg(color).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::LightGreen)
+            .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(color).add_modifier(Modifier::DIM)
+        Style::default().fg(Color::Gray)
+    };
+    let value_style = if used {
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
     };
 
     let value_y = y0;
     let bar_bottom_y = y0 + bar_rows;
     let label_y = bar_bottom_y + 1;
 
-    // 顶部数值
-    put_str_center(buf, x0, slot_w, value_y, &format!("{cn0}"), bar_style);
+    put_str_center(buf, x0, slot_w, value_y, &format!("{cn0}"), value_style);
 
-    // 柱体（自底向上填充）
+    // 柱体自底向上。未用柱不画八分块顶边：那种窄条和 ░ 不是同一种颜色。
     let frac = (cn0 as f64 / MAX_CN0).clamp(0.0, 1.0);
     let total_e = (frac * bar_rows as f64 * 8.0).round() as u32;
     let full = (total_e / 8) as u16;
     let rem = (total_e % 8) as usize;
+    let unused_rows = unused_bar_rows(full, rem);
     for r_idx in 0..bar_rows {
         let y = bar_bottom_y - r_idx;
-        let ch = if r_idx < full {
-            '█'
-        } else if r_idx == full && rem > 0 {
-            LOWER[rem]
+        let row = if used {
+            if r_idx < full {
+                BarRow::Full
+            } else if r_idx == full && rem > 0 {
+                BarRow::Partial { eighth: rem }
+            } else {
+                continue;
+            }
+        } else if r_idx < unused_rows {
+            BarRow::Full
         } else {
             continue;
         };
-        for c in 0..inner_bar_w {
-            put_ch(buf, x0 + c, y, ch, bar_style);
-        }
+        paint_cn0_bar_row(buf, x0, y, inner_bar_w, used, row, bar_style);
     }
 
     // 底部标签：PRN / 仰角 / 方位。在用卫星 PRN 绿色加粗高亮。
@@ -442,6 +465,43 @@ fn draw_cn0_cell(
     ];
     for (li, (txt, st)) in labels.iter().enumerate().take(label_lines as usize) {
         put_str_center(buf, x0, slot_w, label_y + li as u16, txt, *st);
+    }
+}
+
+/// 画柱体的一行。在用柱满格为 `█`，不足一格用同色八分块。
+/// 未用柱只有 `░`，调用方不会再传入残量行。
+fn paint_cn0_bar_row(
+    buf: &mut Buffer,
+    x0: u16,
+    y: u16,
+    width: u16,
+    used: bool,
+    row: BarRow,
+    style: Style,
+) {
+    const LOWER: [char; 8] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇'];
+    let ch = if used {
+        match row {
+            BarRow::Full => '█',
+            BarRow::Partial { eighth } => LOWER[eighth],
+        }
+    } else {
+        '░'
+    };
+    for c in 0..width {
+        put_ch(buf, x0 + c, y, ch, style);
+    }
+}
+
+/// 未用柱的整格行数。残量满半格则进一格，否则舍去，柱顶不再叠一条异色窄条。
+/// 不足半格且没有任何满格时保留一格，避免弱信号的柱体消失。
+fn unused_bar_rows(full: u16, rem: usize) -> u16 {
+    if rem >= 4 {
+        full.saturating_add(1)
+    } else if full == 0 && rem > 0 {
+        1
+    } else {
+        full
     }
 }
 
@@ -1122,18 +1182,6 @@ fn system_color(sys: GnssSystem) -> Color {
     }
 }
 
-fn cn0_color(cn0: u16) -> Color {
-    if cn0 >= 40 {
-        Color::LightGreen
-    } else if cn0 >= 30 {
-        Color::LightYellow
-    } else if cn0 >= 20 {
-        Color::Yellow
-    } else {
-        Color::Red
-    }
-}
-
 /// 模块折线配色：`PE` 固定红色，其余按出现顺序从调色板分配。
 fn module_color(name: &str, index: usize) -> Color {
     if name == "PE" {
@@ -1236,6 +1284,37 @@ mod tests {
         out
     }
 
+    /// 收集矩形内非空单元格的符号与样式。
+    fn cells_in(buf: &Buffer, x0: u16, x1: u16, y0: u16, y1: u16) -> Vec<(String, Style)> {
+        let mut out = Vec::new();
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let cell = &buf[(x, y)];
+                if cell.symbol() != " " {
+                    out.push((cell.symbol().to_string(), cell.style()));
+                }
+            }
+        }
+        out
+    }
+
+    fn style_is_used_bar(style: Style) -> bool {
+        style.fg == Some(Color::LightGreen)
+            && style.add_modifier.contains(Modifier::BOLD)
+            && !style.add_modifier.contains(Modifier::DIM)
+    }
+
+    fn style_is_unused_bar(style: Style) -> bool {
+        style.fg == Some(Color::Gray) && !style.add_modifier.contains(Modifier::BOLD)
+    }
+
+    /// 每一行上非空柱体单元格的个数，用来核对在用/未用柱是否落在同一高度。
+    fn row_fill_counts(buf: &Buffer, x0: u16, x1: u16, y0: u16, y1: u16) -> Vec<usize> {
+        (y0..y1)
+            .map(|y| (x0..x1).filter(|x| buf[(*x, y)].symbol() != " ").count())
+            .collect()
+    }
+
     fn sat(sys: GnssSystem, prn: u16, cn0: u16, elev: u16, az: u16, used: bool) -> Satellite {
         Satellite {
             system: Some(sys),
@@ -1247,6 +1326,67 @@ mod tests {
             last_seen: Some(Local::now()),
             trail: Default::default(),
         }
+    }
+
+    #[test]
+    fn cn0_bar_shows_fix_participation_not_signal_strength() {
+        // 弱而在用、强而在用、强但未用。三者柱高不同，颜色只应反映是否参与定位。
+        let weak_used = sat(GnssSystem::Gps, 1, 12, 20, 10, true);
+        let strong_used = sat(GnssSystem::BeiDou, 7, 50, 60, 80, true);
+        let strong_idle = sat(GnssSystem::Gps, 3, 50, 70, 120, false);
+
+        let mut buf = Buffer::empty(Rect::new(0, 0, 24, 16));
+        draw_cn0_cell(&mut buf, 0, 0, 6, 8, 3, &weak_used);
+        draw_cn0_cell(&mut buf, 8, 0, 6, 8, 3, &strong_used);
+        draw_cn0_cell(&mut buf, 16, 0, 6, 8, 3, &strong_idle);
+
+        // 柱体位于数值行之下、标签行之上：y = 1..=8，每格宽 5。
+        let weak = cells_in(&buf, 0, 5, 1, 9);
+        let strong = cells_in(&buf, 8, 13, 1, 9);
+        let idle = cells_in(&buf, 16, 21, 1, 9);
+
+        assert!(weak.iter().any(|(s, _)| s == "█"), "在用星应为实心柱");
+        assert!(strong.iter().any(|(s, _)| s == "█"), "强信号在用星同样实心");
+        assert!(
+            weak.iter().all(|(_, st)| style_is_used_bar(*st)),
+            "CN0 很低的在用星也保持亮绿实心，不能变成红色或变暗"
+        );
+        assert!(
+            strong.iter().all(|(_, st)| style_is_used_bar(*st)),
+            "在用星的柱色不随 CN0 或星座改变"
+        );
+
+        assert!(
+            idle.iter().all(|(s, st)| s == "░" && style_is_unused_bar(*st)),
+            "未用柱应整柱都是同一种浅灰 ░，不能再叠深浅不同的顶边"
+        );
+        // CN0=50 的残量不足半格：未用柱舍去这一行，底边以下的满格仍与在用柱对齐。
+        assert_eq!(
+            row_fill_counts(&buf, 8, 13, 2, 9),
+            row_fill_counts(&buf, 16, 21, 2, 9),
+            "未用柱满格应与在用柱同宽、同底边"
+        );
+        assert_eq!(
+            row_fill_counts(&buf, 16, 21, 1, 2),
+            vec![0],
+            "不足半格的残量不应再画成柱顶窄条"
+        );
+
+        assert_eq!(unused_bar_rows(7, 2), 7, "不足半格应舍去");
+        assert_eq!(unused_bar_rows(6, 6), 7, "满半格应进成整格 ░");
+        assert_eq!(unused_bar_rows(0, 3), 1, "极弱信号仍保留一格");
+
+        // 柱顶数值：在用为白色加粗，未用为暗灰。不再按强度染成红/黄。
+        let weak_value = cells_in(&buf, 0, 6, 0, 1);
+        assert!(
+            weak_value.iter().any(|(s, st)| {
+                s.chars().all(|c| c.is_ascii_digit())
+                    && st.fg == Some(Color::White)
+                    && st.add_modifier.contains(Modifier::BOLD)
+            }),
+            "弱信号在用星的 CN0 数字不应按强度变红"
+        );
+
     }
 
     #[test]
