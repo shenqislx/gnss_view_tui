@@ -141,6 +141,10 @@ fn default_ntrip_port() -> u16 {
     2101
 }
 
+fn default_rtcm_baud() -> u32 {
+    115_200
+}
+
 /// GGA 上报来源。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -172,6 +176,11 @@ pub struct NtripConfig {
     pub username: String,
     #[serde(default)]
     pub password: String,
+    /// 芯片 UART1 设备路径。RTCM 只写到这一路，不走启动参数 `--port`。
+    pub rtcm_port: String,
+    /// UART1 波特率，与 `--baud` 无关。默认 115200。
+    #[serde(default = "default_rtcm_baud")]
+    pub rtcm_baud: u32,
     /// 上报间隔（秒）。`0` 表示不上报。默认 10。
     #[serde(default = "default_gga_interval")]
     pub gga_interval_secs: u64,
@@ -198,8 +207,8 @@ impl NtripConfig {
             format!("{mode} 每 {}s", self.gga_interval_secs)
         };
         format!(
-            "NTRIP {who}{}:{}/{}，{gga}",
-            self.host, self.port, self.mountpoint
+            "NTRIP {who}{}:{}/{}，RTCM {}@{}，{gga}",
+            self.host, self.port, self.mountpoint, self.rtcm_port, self.rtcm_baud
         )
     }
 }
@@ -214,6 +223,7 @@ fn parse_ntrip_json(text: &str) -> anyhow::Result<NtripConfig> {
         .trim_start_matches('/')
         .to_string();
     cfg.username = cfg.username.trim().to_string();
+    cfg.rtcm_port = cfg.rtcm_port.trim().to_string();
     if cfg.host.is_empty() {
         anyhow::bail!("host 为空");
     }
@@ -222,6 +232,12 @@ fn parse_ntrip_json(text: &str) -> anyhow::Result<NtripConfig> {
     }
     if cfg.port == 0 {
         anyhow::bail!("port 无效");
+    }
+    if cfg.rtcm_port.is_empty() || cfg.rtcm_port.chars().any(|c| c.is_control()) {
+        anyhow::bail!("rtcm_port 无效");
+    }
+    if cfg.rtcm_baud == 0 {
+        anyhow::bail!("rtcm_baud 无效");
     }
     if cfg.mountpoint.is_empty() {
         anyhow::bail!("mountpoint 为空");
@@ -438,6 +454,9 @@ mod tests {
         assert_eq!(cfg.mountpoint, "AUTO");
         assert_eq!(cfg.gga_mode, GgaMode::Serial);
         assert_eq!(cfg.gga_interval_secs, 10);
+        assert_eq!(cfg.rtcm_port, "/dev/ttyUSB1");
+        assert_eq!(cfg.rtcm_baud, 115_200);
+        assert!(cfg.summary().contains("RTCM /dev/ttyUSB1@115200"));
         let pos = cfg.fixed_position.expect("示例应带固定坐标");
         assert!((pos.latitude - 31.160996718).abs() < 1e-9);
         assert!(cfg.summary().contains("your_username@"));
@@ -445,15 +464,32 @@ mod tests {
     }
 
     #[test]
+    fn rtcm_baud_defaults_to_115200_and_rejects_zero() {
+        let cfg = parse_ntrip_json(
+            r#"{"host":"127.0.0.1","mountpoint":"M","rtcm_port":"/dev/ttyUSB1"}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.rtcm_baud, 115_200);
+        let err = parse_ntrip_json(
+            r#"{"host":"127.0.0.1","mountpoint":"M","rtcm_port":"/dev/ttyUSB1","rtcm_baud":0}"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("rtcm_baud"), "{err}");
+        let err = parse_ntrip_json(r#"{"host":"127.0.0.1","mountpoint":"M","rtcm_port":"  "}"#)
+            .unwrap_err();
+        assert!(err.to_string().contains("rtcm_port"), "{err}");
+    }
+
+    #[test]
     fn fixed_mode_requires_position() {
-        let text = r#"{"host":"127.0.0.1","mountpoint":"M","gga_mode":"fixed"}"#;
+        let text = r#"{"host":"127.0.0.1","mountpoint":"M","rtcm_port":"/dev/ttyUSB1","gga_mode":"fixed"}"#;
         let err = parse_ntrip_json(text).unwrap_err();
         assert!(err.to_string().contains("fixed_position"), "{err}");
     }
 
     #[test]
     fn rejects_header_injection_in_mountpoint() {
-        let text = "{\"host\":\"127.0.0.1\",\"mountpoint\":\"A\\r\\nX\",\"username\":\"u\",\"password\":\"p\"}";
+        let text = "{\"host\":\"127.0.0.1\",\"mountpoint\":\"A\\r\\nX\",\"rtcm_port\":\"/dev/ttyUSB1\",\"username\":\"u\",\"password\":\"p\"}";
         assert!(parse_ntrip_json(text).is_err());
     }
 

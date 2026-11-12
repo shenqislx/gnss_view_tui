@@ -6,7 +6,7 @@
 //!   serial/replay/demo  --raw-->  落盘 + 解析 + 归并  --状态-->  ratatui 渲染
 //!        ^                                                          |
 //!        +---------------------- TX 命令 ----------------------------+
-//!   [NTRIP 线程] --RTCM--> 串口 TX，并按间隔把最新/固定 GGA 上报给 caster
+//!   [NTRIP 线程] --RTCM--> UART1，并按间隔把最新/固定 GGA 上报给 caster
 //! ```
 //!
 //! [`run`] 是统一入口：开源默认 bin 以 `None` 注入；外部（私有）功能可通过
@@ -133,25 +133,38 @@ pub fn run(
         pipeline::run(raw_rx, pipeline_state, parser, recorder, observer);
     });
 
-    // 来源线程。RTCM 走独立的有界队列，避免差分数据堵住手动 TX，也避免断线后积压。
-    let mut rtcm_tx = None;
+    // UART0：读 NMEA、发 i 命令，波特率是 --baud。
     let source_handle = match cli.source() {
-        Source::Serial => {
-            let (tx, rx) = mpsc::sync_channel(32);
-            rtcm_tx = Some(tx);
-            source::spawn_serial(
-                &cli,
-                raw_tx,
-                cmd_rx,
-                rx,
-                Arc::clone(&state),
-                Arc::clone(&running),
-            )
-        }
+        Source::Serial => source::spawn_serial(
+            &cli,
+            raw_tx,
+            cmd_rx,
+            Arc::clone(&state),
+            Arc::clone(&running),
+        ),
         Source::Replay(path) => {
             source::spawn_replay(path, raw_tx, Arc::clone(&state), Arc::clone(&running))
         }
         Source::Demo => source::spawn_demo(raw_tx, Arc::clone(&state), Arc::clone(&running)),
+    };
+
+    // UART1：只写 RTCM。设备和波特率都在 NTRIP 配置里，与 --port / --baud 无关。
+    let (rtcm_tx, rtcm_writer) = if matches!(cli.source(), Source::Serial) {
+        if let Some(cfg) = ntrip_cfg.as_ref() {
+            let (tx, rx) = mpsc::sync_channel(32);
+            let writer = source::spawn_rtcm_serial(
+                cfg.rtcm_port.clone(),
+                cfg.rtcm_baud,
+                rx,
+                Arc::clone(&state),
+                Arc::clone(&running),
+            );
+            (Some(tx), Some(writer))
+        } else {
+            (None, None)
+        }
+    } else {
+        (None, None)
     };
 
     let ntrip_handle = if let (Some(cfg), Some(tx)) = (ntrip_cfg, rtcm_tx) {
@@ -193,6 +206,9 @@ pub fn run(
     drop(app);
     let _ = pipeline_handle.join();
     drop(ntrip_handle);
+    if let Some(writer) = rtcm_writer {
+        let _ = writer.join();
+    }
 
     ui_result
 }

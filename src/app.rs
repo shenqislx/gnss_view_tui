@@ -300,7 +300,7 @@ impl App {
         self.input.clear();
     }
 
-    /// 开启或关闭后台 NTRIP。无串口连接时拒绝开启。
+    /// 开启或关闭后台 NTRIP。RTCM 写到配置里的 UART1，不依赖 UART0 是否已连接。
     fn toggle_ntrip(&mut self) {
         let Some(switch) = self.ntrip.clone() else {
             let msg = self
@@ -316,17 +316,6 @@ impl App {
             switch.set(false);
             if let Ok(mut s) = self.state.lock() {
                 s.push_log(LogKind::Info, "NTRIP 已关闭");
-            }
-            return;
-        }
-        let connected = self
-            .state
-            .lock()
-            .ok()
-            .is_some_and(|s| s.stats.connected);
-        if !connected {
-            if let Ok(mut s) = self.state.lock() {
-                s.push_log(LogKind::Error, "串口未连接，NTRIP 不工作");
             }
             return;
         }
@@ -479,19 +468,11 @@ mod tests {
     }
 
     #[test]
-    fn n_key_toggles_ntrip_only_when_serial_is_up() {
+    fn n_key_toggles_ntrip_without_uart0() {
         let switch = NtripSwitch::new(false);
         let mut app = make_app(None).with_ntrip(Some(switch.clone()), None);
         app.on_key(key(KeyCode::Char('n')));
-        assert!(!switch.is_enabled(), "串口未连接时不应开启");
-        {
-            let state = app.state.lock().unwrap();
-            assert!(state.console.iter().any(|l| l.text.contains("串口未连接")));
-        }
-
-        app.state.lock().unwrap().stats.connected = true;
-        app.on_key(key(KeyCode::Char('n')));
-        assert!(switch.is_enabled());
+        assert!(switch.is_enabled(), "RTCM 走独立串口，不要求 UART0 已连接");
         app.on_key(key(KeyCode::Char('n')));
         assert!(!switch.is_enabled());
     }

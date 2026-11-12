@@ -1,7 +1,7 @@
-//! 后台 NTRIP 客户端：连接播发源，把 RTCM 转发到串口并落盘。
+//! 后台 NTRIP 客户端：连接播发源，把 RTCM 交给 UART1 写线程并落盘。
 //!
 //! 默认关闭。界面按 `n` 翻转 [`NtripSwitch`] 后，本线程才发起 TCP 连接。
-//! 仅在实时串口已连接时工作；串口断开则停止转发并等待恢复。网络中断自动重连。
+//! UART0 只提供 NMEA/GGA，断开不会停掉 RTCM 转发。网络中断自动重连。
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -112,7 +112,6 @@ struct Worker {
 
 enum SessionStop {
     Halt,
-    SerialLost,
     Failed(String),
 }
 
@@ -127,7 +126,6 @@ impl Worker {
 
     fn run(mut self) {
         let mut armed = false;
-        let mut serial_warned = false;
         let mut backoff = Duration::from_secs(2);
         while self.alive() {
             if !self.enabled() {
@@ -135,7 +133,6 @@ impl Worker {
                     self.record.close();
                     mark(&self.state, NtripStatus::Off, true, "");
                     armed = false;
-                    serial_warned = false;
                     backoff = Duration::from_secs(2);
                 }
                 if self.park(Duration::from_millis(150)) {
@@ -147,20 +144,6 @@ impl Worker {
                 reset_counters(&self.state);
                 armed = true;
             }
-            if !serial_connected(&self.state) {
-                mark(&self.state, NtripStatus::Error, true, "串口未连接");
-                if !serial_warned {
-                    console_log(
-                        &self.state,
-                        LogKind::Error,
-                        "串口未连接，NTRIP 不工作",
-                    );
-                    serial_warned = true;
-                }
-                let _ = self.park_while_enabled(Duration::from_millis(300));
-                continue;
-            }
-            serial_warned = false;
             mark(&self.state, NtripStatus::Connecting, true, "");
             console_log(
                 &self.state,
@@ -172,16 +155,6 @@ impl Worker {
             );
             match self.session() {
                 SessionStop::Halt => {}
-                SessionStop::SerialLost => {
-                    backoff = Duration::from_secs(2);
-                    mark(&self.state, NtripStatus::Error, true, "串口已断开");
-                    console_log(
-                        &self.state,
-                        LogKind::Error,
-                        "串口已断开，暂停 NTRIP 转发",
-                    );
-                    serial_warned = true;
-                }
                 SessionStop::Failed(err) => {
                     let wait = if self.linked {
                         backoff = Duration::from_secs(2);
@@ -227,13 +200,8 @@ impl Worker {
             return SessionStop::Failed(format!("发送请求失败: {e}"));
         }
 
-        let pending = match read_handshake(
-            &mut stream,
-            &self.running,
-            &self.stop,
-            &self.enabled,
-            || serial_connected(&self.state),
-        ) {
+        let pending = match read_handshake(&mut stream, &self.running, &self.stop, &self.enabled)
+        {
             Ok(body) => body,
             Err(stop) => return stop,
         };
@@ -253,9 +221,6 @@ impl Worker {
         loop {
             if !self.alive() || !self.enabled() {
                 return SessionStop::Halt;
-            }
-            if !serial_connected(&self.state) {
-                return SessionStop::SerialLost;
             }
             if let Err(stop) = self.uplink_gga(&mut stream, &mut next_gga, &mut gga_notice) {
                 return stop;
@@ -366,9 +331,6 @@ impl Worker {
         }
         let state = Arc::clone(&self.state);
         self.record.write(&state, data);
-        if !serial_connected(&self.state) {
-            return Err(SessionStop::SerialLost);
-        }
         rate.observe(Instant::now(), data.len() as u64);
         publish_downlink(&self.state, data.len() as u64, rate.bps());
         match self.rtcm_tx.try_send(data.to_vec()) {
@@ -493,10 +455,6 @@ impl RtcmLog {
         self.recorder = None;
         self.broken = false;
     }
-}
-
-fn serial_connected(state: &Mutex<AppState>) -> bool {
-    state.lock().ok().is_some_and(|s| s.stats.connected)
 }
 
 fn console_log(state: &Mutex<AppState>, kind: LogKind, text: impl Into<String>) {
@@ -655,7 +613,6 @@ fn read_handshake(
     running: &AtomicBool,
     stop: &AtomicBool,
     enabled: &AtomicBool,
-    serial_up: impl Fn() -> bool,
 ) -> Result<Vec<u8>, SessionStop> {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 1024];
@@ -666,9 +623,6 @@ fn read_handshake(
             || !enabled.load(Ordering::Relaxed)
         {
             return Err(SessionStop::Halt);
-        }
-        if !serial_up() {
-            return Err(SessionStop::SerialLost);
         }
         if start.elapsed() > Duration::from_secs(10) {
             return Err(SessionStop::Failed("等待 NTRIP 响应超时".into()));
@@ -921,6 +875,8 @@ mod tests {
             gga_interval_secs: 10,
             gga_mode: GgaMode::Serial,
             fixed_position: None,
+            rtcm_port: "/dev/ttyUSB1".into(),
+            rtcm_baud: 115_200,
         };
         let req = build_request(&cfg);
         assert!(req.starts_with("GET /AUTO HTTP/1.0\r\n"), "{req}");
@@ -1115,6 +1071,8 @@ mod tests {
             password: "pass".into(),
             gga_interval_secs: 10,
             gga_mode: GgaMode::Fixed,
+            rtcm_port: "/dev/ttyUSB1".into(),
+            rtcm_baud: 115_200,
             fixed_position: Some(FixedPosition {
                 latitude: 31.16,
                 longitude: 121.54,

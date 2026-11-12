@@ -4,6 +4,8 @@
   "mountpoint": "AUTO",
   "username": "your_username",
   "password": "your_password",
+  "rtcm_port": "/dev/ttyUSB1",
+  "rtcm_baud": 115200,
   "gga_interval_secs": 10,
   "gga_mode": "serial",
   "fixed_position": {
