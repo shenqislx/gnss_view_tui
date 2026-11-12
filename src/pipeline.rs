@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Local};
 
 use crate::ext::EventObserver;
-use crate::model::{AppState, Dop, LogKind};
+use crate::model::{AppState, Dop, LastGga, LogKind};
 use crate::parser::{ParseEvent, Parser};
 use crate::recorder::Recorder;
 
@@ -186,6 +186,12 @@ fn apply_event(s: &mut AppState, ev: ParseEvent) {
             s.push_profile(&[(name, value)]);
         }
         ParseEvent::Sentence(text) => {
+            if is_gga_sentence(&text) && gga_has_position(&text) {
+                s.last_gga = Some(LastGga {
+                    sentence: text.trim().to_string(),
+                    at: Local::now(),
+                });
+            }
             s.push_log(LogKind::Rx, text);
         }
         ParseEvent::Error(text) => {
@@ -203,6 +209,29 @@ fn apply_event(s: &mut AppState, ev: ParseEvent) {
     }
 }
 
+/// 语句地址是否为 GGA（如 `$GNGGA` / `$GPGGA`）。按字节比较，避免多字节字符切片 panic。
+fn is_gga_sentence(text: &str) -> bool {
+    let rest = text.trim().trim_start_matches(['$', '!']);
+    let addr = rest.split([',', '*']).next().unwrap_or("");
+    let bytes = addr.as_bytes();
+    bytes.len() >= 5
+        && bytes[..2].iter().all(u8::is_ascii)
+        && bytes[2..].eq_ignore_ascii_case(b"GGA")
+}
+
+/// GGA 是否带非空的纬度与经度字段。无定位时的空语句不拿来上报。
+fn gga_has_position(text: &str) -> bool {
+    let rest = text.trim().trim_start_matches(['$', '!']);
+    let payload = rest.split('*').next().unwrap_or(rest);
+    let mut fields = payload.split(',');
+    let _addr = fields.next();
+    let _utc = fields.next();
+    let lat = fields.next().unwrap_or("").trim();
+    let _ns = fields.next();
+    let lon = fields.next().unwrap_or("").trim();
+    !lat.is_empty() && !lon.is_empty()
+}
+
 fn merge_dop(dst: &mut Dop, src: Dop) {
     if src.pdop.is_some() {
         dst.pdop = src.pdop;
@@ -212,5 +241,40 @@ fn merge_dop(dst: &mut Dop, src: Dop) {
     }
     if src.vdop.is_some() {
         dst.vdop = src.vdop;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::AppState;
+
+    #[test]
+    fn captures_latest_gga_only() {
+        let mut state = AppState::new("t".into(), 60);
+        apply_event(
+            &mut state,
+            ParseEvent::Sentence("$GNRMC,123519,A,1,N,2,E,0.1,0.0,150626,,,A*00".into()),
+        );
+        assert!(state.last_gga.is_none());
+        apply_event(
+            &mut state,
+            ParseEvent::Sentence("$GNGGA,123519,3116.0997,N,12132.9704,E,1,08,1.0,10.0,M,0.0,M,,*00".into()),
+        );
+        let kept = state.last_gga.as_ref().unwrap();
+        assert!(kept.sentence.starts_with("$GNGGA"));
+        apply_event(
+            &mut state,
+            ParseEvent::Sentence("$GNGGA,,,,,,,,*6A".into()),
+        );
+        assert!(
+            state.last_gga.as_ref().unwrap().sentence.starts_with("$GNGGA,123519"),
+            "无经纬度的 GGA 不应覆盖上一条有效语句"
+        );
+        apply_event(
+            &mut state,
+            ParseEvent::Sentence("$你GGA,1,2*00".into()),
+        );
+        assert!(state.last_gga.as_ref().unwrap().sentence.starts_with("$GNGGA,123519"));
     }
 }

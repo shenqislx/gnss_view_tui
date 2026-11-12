@@ -2,5 +2,7 @@
 /records
 /data/*
 !/data/ground_truth.json
+!/data/ntrip.example.json
 *.raw
+*.rtcm
 *.log

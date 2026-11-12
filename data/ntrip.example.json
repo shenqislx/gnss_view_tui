@@ -1,0 +1,14 @@
+{
+  "host": "rtk.ntrip.qxwz.com",
+  "port": 8002,
+  "mountpoint": "AUTO",
+  "username": "your_username",
+  "password": "your_password",
+  "gga_interval_secs": 10,
+  "gga_mode": "serial",
+  "fixed_position": {
+    "latitude": 31.160996718,
+    "longitude": 121.54950658,
+    "altitude": 62.338
+  }
+}

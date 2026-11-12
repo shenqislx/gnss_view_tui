@@ -186,6 +186,41 @@ pub struct Dop {
     pub vdop: Option<f64>,
 }
 
+/// NTRIP 客户端连接状态。
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum NtripStatus {
+    /// 未开启。
+    #[default]
+    Off,
+    /// 正在建立连接。
+    Connecting,
+    /// 已连上播发源并在接收数据。
+    Connected,
+    /// 连接失败、中断，或因串口不可用而暂停。
+    Error,
+}
+
+/// NTRIP 运行统计，供顶栏展示连接状态与吞吐量。
+#[derive(Clone, Debug, Default)]
+pub struct NtripStats {
+    pub status: NtripStatus,
+    /// 本次开启后累计收到的 RTCM 字节数。
+    pub bytes_total: u64,
+    /// 最近 1 秒收到的字节数（字节/秒）。
+    pub bps: f64,
+    /// 本次开启后已向服务器上报的 GGA 条数。
+    pub gga_sent: u64,
+    /// 最近一次失败原因。仅在 [`NtripStatus::Error`] 时展示。
+    pub detail: String,
+}
+
+/// 串口最近一条带经纬度的 GGA。
+#[derive(Clone, Debug)]
+pub struct LastGga {
+    pub sentence: String,
+    pub at: DateTime<Local>,
+}
+
 /// 运行统计。
 #[derive(Clone, Debug)]
 pub struct Stats {
@@ -397,6 +432,10 @@ pub struct AppState {
     pub ground_truth: Option<GroundTruth>,
     /// 位置偏差（ENU，米）时间序列。
     pub pos_bias: PosBias,
+    /// 串口最近一条带经纬度的 GGA，供 NTRIP 上报。
+    pub last_gga: Option<LastGga>,
+    /// NTRIP 客户端状态。
+    pub ntrip: NtripStats,
 }
 
 /// 轨迹图保留的最大定位点数。
@@ -424,6 +463,8 @@ impl AppState {
             traj_span_m: TRAJ_DEFAULT_SPAN_M,
             ground_truth: None,
             pos_bias: PosBias::new(cap),
+            last_gga: None,
+            ntrip: NtripStats::default(),
         }
     }
 

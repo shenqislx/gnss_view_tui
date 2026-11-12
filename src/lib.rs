@@ -6,6 +6,7 @@
 //!   serial/replay/demo  --raw-->  落盘 + 解析 + 归并  --状态-->  ratatui 渲染
 //!        ^                                                          |
 //!        +---------------------- TX 命令 ----------------------------+
+//!   [NTRIP 线程] --RTCM--> 串口 TX，并按间隔把最新/固定 GGA 上报给 caster
 //! ```
 //!
 //! [`run`] 是统一入口：开源默认 bin 以 `None` 注入；外部（私有）功能可通过
@@ -16,6 +17,7 @@ mod config;
 mod demo;
 mod ext;
 mod model;
+mod ntrip;
 mod parser;
 mod pipeline;
 mod recorder;
@@ -82,6 +84,29 @@ pub fn run(
     for msg in gt_logs {
         app_state.push_log(crate::model::LogKind::Info, msg);
     }
+    let (ntrip_cfg, ntrip_logs) = cli.load_ntrip_config();
+    for msg in ntrip_logs {
+        let kind = if msg.contains("失败") || msg.contains("不存在") {
+            crate::model::LogKind::Error
+        } else {
+            crate::model::LogKind::Info
+        };
+        app_state.push_log(kind, msg);
+    }
+    if let Some(cfg) = &ntrip_cfg {
+        let summary = cfg.summary();
+        if matches!(cli.source(), Source::Serial) {
+            app_state.push_log(
+                crate::model::LogKind::Info,
+                format!("{summary}，按 n 开启"),
+            );
+        } else {
+            app_state.push_log(
+                crate::model::LogKind::Info,
+                format!("{summary}；当前不是实时串口模式，NTRIP 不工作"),
+            );
+        }
+    }
     let state = Arc::new(Mutex::new(app_state));
     let running = Arc::new(AtomicBool::new(true));
 
@@ -108,33 +133,66 @@ pub fn run(
         pipeline::run(raw_rx, pipeline_state, parser, recorder, observer);
     });
 
-    // 来源线程
+    // 来源线程。RTCM 走独立的有界队列，避免差分数据堵住手动 TX，也避免断线后积压。
+    let mut rtcm_tx = None;
     let source_handle = match cli.source() {
-        Source::Serial => source::spawn_serial(
-            &cli,
-            raw_tx,
-            cmd_rx,
-            Arc::clone(&state),
-            Arc::clone(&running),
-        ),
+        Source::Serial => {
+            let (tx, rx) = mpsc::sync_channel(32);
+            rtcm_tx = Some(tx);
+            source::spawn_serial(
+                &cli,
+                raw_tx,
+                cmd_rx,
+                rx,
+                Arc::clone(&state),
+                Arc::clone(&running),
+            )
+        }
         Source::Replay(path) => {
             source::spawn_replay(path, raw_tx, Arc::clone(&state), Arc::clone(&running))
         }
         Source::Demo => source::spawn_demo(raw_tx, Arc::clone(&state), Arc::clone(&running)),
     };
 
+    let ntrip_handle = if let (Some(cfg), Some(tx)) = (ntrip_cfg, rtcm_tx) {
+        Some(ntrip::NtripHandle::spawn(
+            cfg,
+            cli.output.clone(),
+            cli.no_record,
+            tx,
+            Arc::clone(&state),
+            Arc::clone(&running),
+        ))
+    } else {
+        None
+    };
+    let ntrip_switch = ntrip_handle.as_ref().map(|handle| handle.switch());
+    let ntrip_unavailable = if ntrip_switch.is_some() {
+        None
+    } else if matches!(cli.source(), Source::Serial) {
+        Some("未配置 NTRIP（在 config.json 设置 ntrip_path，示例见 data/ntrip.example.json）".to_string())
+    } else {
+        Some("NTRIP 仅在实时串口模式下可用".to_string())
+    };
+
     // 界面（主线程）。失败也要保证恢复终端。
     let mut terminal = ratatui::init();
-    let mut app = App::new(Arc::clone(&state), cmd_tx, Arc::clone(&running)).with_ext(ui_ext);
+    let mut app = App::new(Arc::clone(&state), cmd_tx, Arc::clone(&running))
+        .with_ext(ui_ext)
+        .with_ntrip(ntrip_switch, ntrip_unavailable);
     let ui_result = app.run(&mut terminal);
     ratatui::restore();
 
     // 收尾：通知所有线程退出。
     running.store(false, std::sync::atomic::Ordering::Relaxed);
+    if let Some(handle) = &ntrip_handle {
+        handle.switch().set(false);
+    }
     let _ = source_handle.join();
     // 管线线程在 raw_tx 全部释放后自然结束。
     drop(app);
     let _ = pipeline_handle.join();
+    drop(ntrip_handle);
 
     ui_result
 }

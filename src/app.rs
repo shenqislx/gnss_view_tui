@@ -11,6 +11,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 
 use crate::ext::{Screen, UiExt};
 use crate::model::{AppState, LogKind};
+use crate::ntrip::NtripSwitch;
 use crate::source::TxCommand;
 use crate::ui;
 
@@ -83,6 +84,9 @@ pub struct App {
     pub screen: Screen,
     /// 注入的 UI 扩展（如私有测试模式）；为 None 时无扩展屏。
     pub ext: Option<Box<dyn UiExt>>,
+    /// 后台 NTRIP 开关。为 None 时按 `n` 只提示原因。
+    ntrip: Option<NtripSwitch>,
+    ntrip_unavailable: Option<String>,
 }
 
 impl App {
@@ -103,12 +107,21 @@ impl App {
             overlay: Overlay::None,
             screen: Screen::Main,
             ext: None,
+            ntrip: None,
+            ntrip_unavailable: None,
         }
     }
 
     /// 注入 UI 扩展（如私有测试模式）。开源默认 bin 不调用此方法。
     pub fn with_ext(mut self, ext: Option<Box<dyn UiExt>>) -> Self {
         self.ext = ext;
+        self
+    }
+
+    /// 注入 NTRIP 开关。`unavailable` 在没有开关时作为 `n` 键的提示。
+    pub fn with_ntrip(mut self, switch: Option<NtripSwitch>, unavailable: Option<String>) -> Self {
+        self.ntrip = switch;
+        self.ntrip_unavailable = unavailable;
         self
     }
 
@@ -165,7 +178,7 @@ impl App {
             return;
         }
 
-        // 覆盖面板独占前台：仅响应关闭/切换，其余按键忽略。
+        // 覆盖面板独占前台：仅响应关闭/切换与 NTRIP 开关，其余按键忽略。
         if self.overlay != Overlay::None {
             self.on_key_overlay(key);
             return;
@@ -177,13 +190,14 @@ impl App {
         }
     }
 
-    /// 覆盖面板模式下的按键：Esc 关闭，s/t/p 在面板间切换或关闭，q 退出。
+    /// 覆盖面板模式下的按键：Esc 关闭，s/t/p 在面板间切换或关闭，n 开关 NTRIP，q 退出。
     fn on_key_overlay(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.overlay = Overlay::None,
             KeyCode::Char('s') => self.toggle_overlay(Overlay::Skyplot),
             KeyCode::Char('t') => self.toggle_overlay(Overlay::Trajectory),
             KeyCode::Char('p') => self.toggle_overlay(Overlay::PosBias),
+            KeyCode::Char('n') => self.toggle_ntrip(),
             // 位置偏差面板支持在其内调整窗口（与 CPU Load 同步）。
             KeyCode::Char('+') | KeyCode::Char('=') => self.adjust_window(10),
             KeyCode::Char('-') | KeyCode::Char('_') => self.adjust_window(-10),
@@ -207,6 +221,7 @@ impl App {
             KeyCode::Char('s') => self.overlay = Overlay::Skyplot,
             KeyCode::Char('t') => self.overlay = Overlay::Trajectory,
             KeyCode::Char('p') => self.overlay = Overlay::PosBias,
+            KeyCode::Char('n') => self.toggle_ntrip(),
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char('c') => {
                 if let Ok(mut s) = self.state.lock() {
@@ -285,6 +300,42 @@ impl App {
         self.input.clear();
     }
 
+    /// 开启或关闭后台 NTRIP。无串口连接时拒绝开启。
+    fn toggle_ntrip(&mut self) {
+        let Some(switch) = self.ntrip.clone() else {
+            let msg = self
+                .ntrip_unavailable
+                .clone()
+                .unwrap_or_else(|| "未配置 NTRIP".to_string());
+            if let Ok(mut s) = self.state.lock() {
+                s.push_log(LogKind::Error, msg);
+            }
+            return;
+        };
+        if switch.is_enabled() {
+            switch.set(false);
+            if let Ok(mut s) = self.state.lock() {
+                s.push_log(LogKind::Info, "NTRIP 已关闭");
+            }
+            return;
+        }
+        let connected = self
+            .state
+            .lock()
+            .ok()
+            .is_some_and(|s| s.stats.connected);
+        if !connected {
+            if let Ok(mut s) = self.state.lock() {
+                s.push_log(LogKind::Error, "串口未连接，NTRIP 不工作");
+            }
+            return;
+        }
+        switch.set(true);
+        if let Ok(mut s) = self.state.lock() {
+            s.push_log(LogKind::Info, "NTRIP 已开启");
+        }
+    }
+
     /// 发送 DTR 复位脉冲（类似 picocom 的 pulse DTR），用于复位下位机。
     fn dtr_reset(&mut self) {
         match self.cmd_tx.send(TxCommand::DtrReset {
@@ -312,6 +363,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::ext::EventObserver;
+    use crate::ntrip::NtripSwitch;
     use crate::model::AppState;
     use crate::parser::ParseEvent;
     use chrono::Local;
@@ -424,5 +476,42 @@ mod tests {
         let state = AppState::new("test".into(), 60);
         obs.observe(&ParseEvent::EpochTick, Local::now(), &state);
         assert_eq!(*count.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn n_key_toggles_ntrip_only_when_serial_is_up() {
+        let switch = NtripSwitch::new(false);
+        let mut app = make_app(None).with_ntrip(Some(switch.clone()), None);
+        app.on_key(key(KeyCode::Char('n')));
+        assert!(!switch.is_enabled(), "串口未连接时不应开启");
+        {
+            let state = app.state.lock().unwrap();
+            assert!(state.console.iter().any(|l| l.text.contains("串口未连接")));
+        }
+
+        app.state.lock().unwrap().stats.connected = true;
+        app.on_key(key(KeyCode::Char('n')));
+        assert!(switch.is_enabled());
+        app.on_key(key(KeyCode::Char('n')));
+        assert!(!switch.is_enabled());
+    }
+
+    #[test]
+    fn n_key_toggles_ntrip_while_overlay_is_open() {
+        let switch = NtripSwitch::new(false);
+        let mut app = make_app(None).with_ntrip(Some(switch.clone()), None);
+        app.state.lock().unwrap().stats.connected = true;
+        app.overlay = Overlay::Skyplot;
+        app.on_key(key(KeyCode::Char('n')));
+        assert!(switch.is_enabled());
+        assert_eq!(app.overlay, Overlay::Skyplot);
+    }
+
+    #[test]
+    fn n_key_reports_when_ntrip_is_unavailable() {
+        let mut app = make_app(None).with_ntrip(None, Some("仅串口模式".into()));
+        app.on_key(key(KeyCode::Char('n')));
+        let state = app.state.lock().unwrap();
+        assert!(state.console.iter().any(|l| l.text.contains("仅串口模式")));
     }
 }

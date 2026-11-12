@@ -1,6 +1,6 @@
 //! 数据来源线程：串口 / 回放 / 演示，统一产出 [`RawChunk`] 喂给管线。
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -29,6 +29,7 @@ pub fn spawn_serial(
     cli: &Cli,
     raw_tx: Sender<RawChunk>,
     cmd_rx: Receiver<TxCommand>,
+    rtcm_rx: Receiver<Vec<u8>>,
     state: Arc<Mutex<AppState>>,
     running: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
@@ -58,6 +59,8 @@ pub fn spawn_serial(
 
             let mut port = match open {
                 Ok(p) => {
+                    // 先丢掉断线期间的积压，再对外宣布已连接，避免新差分被一起清掉。
+                    discard_rtcm(&rtcm_rx);
                     if let Ok(mut s) = state.lock() {
                         s.stats.connected = true;
                         s.push_log(LogKind::Info, format!("已打开串口 {port_name}@{baud}"));
@@ -115,6 +118,14 @@ pub fn spawn_serial(
                     }
                 }
 
+                if !write_rtcm(&mut port, &rtcm_rx, &state) {
+                    if let Ok(mut s) = state.lock() {
+                        s.stats.connected = false;
+                    }
+                    discard_rtcm(&rtcm_rx);
+                    break;
+                }
+
                 match port.read(&mut buf) {
                     Ok(0) => {}
                     Ok(n) => {
@@ -132,6 +143,7 @@ pub fn spawn_serial(
                             s.stats.connected = false;
                             s.push_log(LogKind::Error, format!("读取错误: {e}，尝试重连"));
                         }
+                        discard_rtcm(&rtcm_rx);
                         break; // 跳出读写循环，重新打开
                     }
                 }
@@ -142,6 +154,45 @@ pub fn spawn_serial(
             }
         }
     })
+}
+
+/// 丢掉断线期间积压的 RTCM。过期差分在重连后一次性写入没有意义。
+fn discard_rtcm(rtcm_rx: &Receiver<Vec<u8>>) {
+    while rtcm_rx.try_recv().is_ok() {}
+}
+
+/// 每轮最多转发 16KB，避免 RTCM 占满串口而读不到 NMEA。
+/// 队列有界，写不赢时由 NTRIP 侧丢弃新数据。返回 false 表示需要重连。
+fn write_rtcm(
+    port: &mut impl Write,
+    rtcm_rx: &Receiver<Vec<u8>>,
+    state: &Mutex<AppState>,
+) -> bool {
+    const BUDGET: usize = 16 * 1024;
+    let mut budget = BUDGET;
+    let mut wrote = false;
+    while budget > 0 {
+        match rtcm_rx.try_recv() {
+            Ok(data) => {
+                budget = budget.saturating_sub(data.len());
+                if let Err(e) = port.write_all(&data) {
+                    if let Ok(mut s) = state.lock() {
+                        s.push_log(LogKind::Error, format!("RTCM 转发失败: {e}"));
+                    }
+                    return false;
+                }
+                wrote = true;
+            }
+            Err(_) => break,
+        }
+    }
+    if wrote && let Err(e) = port.flush() {
+        if let Ok(mut s) = state.lock() {
+            s.push_log(LogKind::Error, format!("RTCM 转发失败: {e}"));
+        }
+        return false;
+    }
+    true
 }
 
 /// 回放线程：读取此前落盘的 `.raw` 文件，按块喂入管线。

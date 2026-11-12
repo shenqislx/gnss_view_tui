@@ -13,7 +13,7 @@ use ratatui::widgets::{
 
 use crate::app::{App, Mode, Overlay};
 use crate::ext::Screen;
-use crate::model::{AppState, GnssSystem, LogKind};
+use crate::model::{AppState, GnssSystem, LogKind, NtripStatus};
 
 /// 渲染整个界面。
 pub fn render(frame: &mut Frame, app: &App, state: &AppState) {
@@ -49,7 +49,7 @@ pub fn render(frame: &mut Frame, app: &App, state: &AppState) {
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // 顶部状态栏
+            Constraint::Length(4), // 顶部状态栏（标题与统计分两行）
             Constraint::Min(8),    // 主体：左栏 + CN0 网格（占据更大区域）
             Constraint::Length(8), // 滑动曲线（整行）
             Constraint::Length(8), // 控制台
@@ -81,29 +81,83 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
         None => Span::styled(" 无落盘 ", Style::default().fg(Color::Gray)),
     };
 
-    let line = Line::from(vec![
-        Span::styled(" GNSS 监控 ", Style::default().fg(Color::Black).bg(Color::Cyan).bold()),
-        Span::raw(" "),
-        conn,
-        Span::raw(" "),
-        rec,
-        Span::raw("  "),
-        Span::styled(format!("源: {}", st.source_label), Style::default().fg(Color::White)),
-        Span::raw("  "),
-        Span::styled(
-            format!(
-                "收: {}  报文: {}  错误: {}  运行: {}s",
-                human_bytes(st.bytes_total),
-                st.sentences_ok,
-                st.parse_errors,
-                uptime
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(" GNSS 监控 ", Style::default().fg(Color::Black).bg(Color::Cyan).bold()),
+            Span::raw(" "),
+            conn,
+            Span::raw(" "),
+            rec,
+            Span::raw(" "),
+            ntrip_badge(&state.ntrip),
+        ]),
+        Line::from(vec![
+            Span::styled(format!(" 源: {}", st.source_label), Style::default().fg(Color::White)),
+            Span::raw("  "),
+            Span::styled(
+                format!(
+                    "收: {}  报文: {}  错误: {}  运行: {}s",
+                    human_bytes(st.bytes_total),
+                    st.sentences_ok,
+                    st.parse_errors,
+                    uptime
+                ),
+                Style::default().fg(Color::Gray),
             ),
-            Style::default().fg(Color::Gray),
-        ),
-    ]);
+        ]),
+    ];
 
-    let p = Paragraph::new(line).block(Block::default().borders(Borders::ALL));
+    let p = Paragraph::new(lines).block(Block::default().borders(Borders::ALL));
     frame.render_widget(p, area);
+}
+
+fn ntrip_badge(ntrip: &crate::model::NtripStats) -> Span<'static> {
+    match ntrip.status {
+        NtripStatus::Off => Span::styled(
+            " NTRIP:关(n) ",
+            Style::default().fg(Color::DarkGray),
+        ),
+        NtripStatus::Connecting => Span::styled(
+            " ○ NTRIP 连接中 ",
+            Style::default().fg(Color::Black).bg(Color::Yellow),
+        ),
+        NtripStatus::Connected => Span::styled(
+            format!(
+                " ● NTRIP {} ({}) ",
+                human_rate(ntrip.bps),
+                human_bytes(ntrip.bytes_total)
+            ),
+            Style::default().fg(Color::Black).bg(Color::Green),
+        ),
+        NtripStatus::Error => Span::styled(
+            format!(" ○ NTRIP {} ", ntrip_error_hint(&ntrip.detail)),
+            Style::default().fg(Color::White).bg(Color::Red),
+        ),
+    }
+}
+
+fn ntrip_error_hint(detail: &str) -> String {
+    let upper = detail.to_ascii_uppercase();
+    if upper.contains("401") {
+        return "401".to_string();
+    }
+    if upper.contains("403") {
+        return "403".to_string();
+    }
+    if detail.contains("挂载点") || upper.contains("SOURCETABLE") {
+        return "挂载点".to_string();
+    }
+    if detail.contains("串口") {
+        return "串口".to_string();
+    }
+    if detail.is_empty() {
+        return "中断".to_string();
+    }
+    detail.chars().take(12).collect()
+}
+
+fn human_rate(bps: f64) -> String {
+    format!("{}/s", human_bytes(bps.round().max(0.0) as u64))
 }
 
 fn render_body(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -822,7 +876,7 @@ fn render_input(frame: &mut Frame, area: Rect, app: &App) {
         Mode::Normal => Line::from(vec![
             Span::styled(" 命令 ", Style::default().fg(Color::Black).bg(Color::Gray).bold()),
             Span::styled(
-                " i:发送  s:天空图  t:轨迹  p:位置偏差  d:DTR  f:星座  ←→:翻页  +/-:窗口  c:清屏  ?:帮助  q:退出",
+                " i:发送  n:NTRIP  s:天空图  t:轨迹  p:位置偏差  d:DTR  f:星座  ←→:翻页  +/-:窗口  c:清屏  ?:帮助  q:退出",
                 Style::default().fg(Color::Gray),
             ),
         ]),
@@ -832,7 +886,7 @@ fn render_input(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_help(frame: &mut Frame, area: Rect) {
     let w = 58u16.min(area.width.saturating_sub(4));
-    let h = 22u16.min(area.height.saturating_sub(2));
+    let h = 24u16.min(area.height.saturating_sub(2));
     let x = area.x + (area.width - w) / 2;
     let y = area.y + (area.height - h) / 2;
     let popup = Rect::new(x, y, w, h);
@@ -846,6 +900,7 @@ fn render_help(frame: &mut Frame, area: Rect) {
         Line::raw("  s              天空图 Skyplot（覆盖前台, Esc 关闭）"),
         Line::raw("  t              轨迹图 Trajectory（覆盖前台, Esc 关闭）"),
         Line::raw("  p              位置偏差 ENU（覆盖前台, Esc 关闭）"),
+        Line::raw("  n              开关 NTRIP（主界面与覆盖面板）"),
         Line::raw("  Esc            退出输入模式 / 关闭覆盖面板"),
         Line::raw("  Enter          发送当前命令到串口"),
         Line::raw("  d              发送 DTR 复位脉冲 (复位下位机)"),
@@ -1433,6 +1488,47 @@ mod tests {
         // PVT 高度分开展示与速度单位（CJK 宽字符在缓冲区后跟空格，按单字符校验）
         assert!(text.contains('椭') && text.contains('差'), "差距非零应分开展示椭球高");
         assert!(text.contains("m/s"), "速度应换算为 m/s");
+        assert!(text.contains("NTRIP"), "顶栏应提示 NTRIP 开关");
+    }
+
+    #[test]
+    fn header_shows_ntrip_throughput_when_connected() {
+        use crate::model::NtripStatus;
+        let mut state = AppState::new("test".into(), 60);
+        state.ntrip.status = NtripStatus::Connected;
+        state.ntrip.bps = 1200.0;
+        state.ntrip.bytes_total = 45 * 1024;
+
+        let state = Arc::new(Mutex::new(state));
+        let (cmd_tx, _rx) = mpsc::channel();
+        let app = App::new(Arc::clone(&state), cmd_tx, Arc::new(AtomicBool::new(true)));
+        let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        let guard = state.lock().unwrap();
+        term.draw(|f| render(f, &app, &guard)).unwrap();
+        drop(guard);
+
+        let text = buffer_text(&term);
+        assert!(text.contains("1.2 KB/s"), "应显示实时吞吐");
+        assert!(text.contains("45.0 KB"), "应显示累计字节");
+    }
+
+    #[test]
+    fn header_error_badge_shows_short_reason() {
+        use crate::model::NtripStatus;
+        let mut state = AppState::new("test".into(), 60);
+        state.ntrip.status = NtripStatus::Error;
+        state.ntrip.detail = "HTTP/1.0 401 Unauthorized".into();
+
+        let state = Arc::new(Mutex::new(state));
+        let (cmd_tx, _rx) = mpsc::channel();
+        let app = App::new(Arc::clone(&state), cmd_tx, Arc::new(AtomicBool::new(true)));
+        let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
+        let guard = state.lock().unwrap();
+        term.draw(|f| render(f, &app, &guard)).unwrap();
+        drop(guard);
+
+        let text = buffer_text(&term);
+        assert!(text.contains("NTRIP 401"), "{text}");
     }
 
     #[test]
