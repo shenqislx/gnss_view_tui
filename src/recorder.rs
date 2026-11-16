@@ -30,8 +30,7 @@ impl Recorder {
     }
 
     fn create(dir: &Path, ext: &str) -> Result<Self> {
-        fs::create_dir_all(dir)
-            .with_context(|| format!("创建落盘目录失败: {}", dir.display()))?;
+        fs::create_dir_all(dir).with_context(|| format!("创建落盘目录失败: {}", dir.display()))?;
         let now = chrono::Local::now();
         let stamp = now.format("%Y%m%d_%H%M%S");
         let millis = now.timestamp_subsec_millis();
@@ -102,9 +101,16 @@ mod tests {
                 .as_nanos()
         ));
         let mut rec = Recorder::new_rtcm(&dir).unwrap();
-        assert_eq!(rec.path().extension().and_then(|e| e.to_str()), Some("rtcm"));
+        assert_eq!(
+            rec.path().extension().and_then(|e| e.to_str()),
+            Some("rtcm")
+        );
         let mut other = Recorder::new_rtcm(&dir).unwrap();
-        assert_ne!(rec.path(), other.path(), "同一秒内的第二个文件不能覆盖第一个");
+        assert_ne!(
+            rec.path(),
+            other.path(),
+            "同一秒内的第二个文件不能覆盖第一个"
+        );
         rec.write(&[0xD3, 0x00, 0x01]).unwrap();
         other.write(&[0x02]).unwrap();
         rec.flush().unwrap();

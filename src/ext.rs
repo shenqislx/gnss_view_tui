@@ -43,6 +43,8 @@ pub trait UiExt: Send {
     /// **无论当前在主屏还是扩展屏都会被调用**（测试可在后台持续运行）。
     /// 默认空实现，开源默认 bin 行为不变。
     fn tick(&mut self, _tx: &Sender<TxCommand>) {}
+    /// 注入可克隆的 NTRIP 控制。默认忽略，开源界面仍只用 `n` 键。
+    fn bind_ntrip(&mut self, _control: Option<crate::ntrip::NtripControl>) {}
     /// 渲染扩展视图（独占给定区域）。
     fn render(&self, frame: &mut Frame, area: Rect, state: &AppState);
     /// 顶栏状态片段（如"冷启动 3/10"）；返回 `None` 则不显示。

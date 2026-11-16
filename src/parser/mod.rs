@@ -28,6 +28,10 @@ pub enum ParseEvent {
         fix_quality: Option<u8>,
         sats_used: Option<u16>,
         hdop: Option<f64>,
+        /// 差分龄期（秒，GGA 字段 13）。空字段为 None，显式 0 为 `Some(0.0)`。
+        dgps_age: Option<f64>,
+        /// 差分基站号（GGA 字段 14）。空字段为 None，保留原始文本（含 `0000`）。
+        dgps_station: Option<String>,
     },
     /// 运动信息（来自 RMC）。
     Rmc {

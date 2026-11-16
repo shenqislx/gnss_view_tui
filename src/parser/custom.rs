@@ -111,10 +111,7 @@ impl Parser for CustomParser {
                 State::Checksum { class, len } => {
                     let lo = (len & 0xFF) as u8;
                     let hi = ((len >> 8) & 0xFF) as u8;
-                    let calc = self
-                        .payload
-                        .iter()
-                        .fold(class ^ lo ^ hi, |acc, &x| acc ^ x);
+                    let calc = self.payload.iter().fold(class ^ lo ^ hi, |acc, &x| acc ^ x);
                     if calc == b {
                         decode_frame(class, &self.payload, out);
                     } else {
@@ -151,7 +148,9 @@ fn decode_frame(class: u8, payload: &[u8], out: &mut Vec<ParseEvent>) {
             out.push(ParseEvent::EpochTick);
         }
         other => {
-            out.push(ParseEvent::Sentence(format!("[CUSTOM] 未知 class=0x{other:02X}")));
+            out.push(ParseEvent::Sentence(format!(
+                "[CUSTOM] 未知 class=0x{other:02X}"
+            )));
         }
     }
 }

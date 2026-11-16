@@ -134,6 +134,10 @@ pub struct Pvt {
     pub fix_quality: Option<u8>,
     pub fix_type: Option<u8>,
     pub sats_used: Option<u16>,
+    /// 最近一条 GGA 的差分龄期（秒）。每条 GGA 都覆盖，空字段清空为 None。
+    pub dgps_age: Option<f64>,
+    /// 最近一条 GGA 的差分基站号。每条 GGA 都覆盖，空字段清空为 None。
+    pub dgps_station: Option<String>,
     pub valid: bool,
 }
 
@@ -329,7 +333,6 @@ impl Profile {
             }
         }
     }
-
 }
 
 /// 地面真值（Ground Truth）：用于计算定位误差的固定参考点。
@@ -373,11 +376,7 @@ impl PosBias {
 
     /// 追加一个历元的 ENU 偏差采样。
     pub fn push(&mut self, e: f64, n: f64, u: f64) {
-        for (dq, v) in [
-            (&mut self.east, e),
-            (&mut self.north, n),
-            (&mut self.up, u),
-        ] {
+        for (dq, v) in [(&mut self.east, e), (&mut self.north, n), (&mut self.up, u)] {
             dq.push_back(v);
             while dq.len() > self.capacity {
                 dq.pop_front();
@@ -616,7 +615,11 @@ impl AppState {
 
         // 维护星轨：仅当仰角/方位均已知且相对上一点发生变化时追加。
         if let (Some(el), Some(az)) = (entry.elevation, entry.azimuth) {
-            let changed = entry.trail.back().map(|&(e, a)| e != el || a != az).unwrap_or(true);
+            let changed = entry
+                .trail
+                .back()
+                .map(|&(e, a)| e != el || a != az)
+                .unwrap_or(true);
             if changed {
                 entry.trail.push_back((el, az));
                 while entry.trail.len() > SAT_TRAIL_MAX {
@@ -774,7 +777,10 @@ mod tests {
         // 重复同一点不增长星轨。
         s.upsert_satellite(mk(45, 100));
         s.upsert_satellite(mk(45, 100));
-        let key = SatKey { system: GnssSystem::Gps, prn: 1 };
+        let key = SatKey {
+            system: GnssSystem::Gps,
+            prn: 1,
+        };
         assert_eq!(s.satellites[&key].trail.len(), 1);
         // 变化则追加，并受 SAT_TRAIL_MAX 限制。
         for k in 0..(SAT_TRAIL_MAX + 5) {

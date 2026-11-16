@@ -32,21 +32,23 @@ pub fn run(
     let mut events: Vec<ParseEvent> = Vec::with_capacity(64);
 
     if let Some(rec) = &recorder
-        && let Ok(mut s) = state.lock() {
-            s.stats.recording_path = Some(rec.path().display().to_string());
-            s.push_log(
-                LogKind::Info,
-                format!("原始数据落盘: {}", rec.path().display()),
-            );
-        }
+        && let Ok(mut s) = state.lock()
+    {
+        s.stats.recording_path = Some(rec.path().display().to_string());
+        s.push_log(
+            LogKind::Info,
+            format!("原始数据落盘: {}", rec.path().display()),
+        );
+    }
 
     while let Ok(chunk) = rx.recv() {
         // 1) 落盘
         if let Some(rec) = recorder.as_mut()
             && let Err(e) = rec.write(&chunk.data)
-                && let Ok(mut s) = state.lock() {
-                    s.push_log(LogKind::Error, format!("落盘失败: {e}"));
-                }
+            && let Ok(mut s) = state.lock()
+        {
+            s.push_log(LogKind::Error, format!("落盘失败: {e}"));
+        }
 
         // 2) 解析
         events.clear();
@@ -99,6 +101,8 @@ fn apply_event(s: &mut AppState, ev: ParseEvent) {
             fix_quality,
             sats_used,
             hdop,
+            dgps_age,
+            dgps_station,
         } => {
             s.stats.sentences_ok += 1;
             let pvt = &mut s.pvt;
@@ -126,6 +130,9 @@ fn apply_event(s: &mut AppState, ev: ParseEvent) {
             if hdop.is_some() {
                 s.dop.hdop = hdop;
             }
+            // 差分字段随本条 GGA 覆盖，空字段必须清掉上一条的基站/龄期。
+            pvt.dgps_age = dgps_age;
+            pvt.dgps_station = dgps_station;
         }
         ParseEvent::Rmc {
             utc,
@@ -219,7 +226,7 @@ fn is_gga_sentence(text: &str) -> bool {
         && bytes[2..].eq_ignore_ascii_case(b"GGA")
 }
 
-/// GGA 是否带非空的纬度与经度字段。无定位时的空语句不拿来上报。
+/// GGA 是否带坐标且定位质量大于 0。无定位语句不能拿来向 NTRIP 上报。
 fn gga_has_position(text: &str) -> bool {
     let rest = text.trim().trim_start_matches(['$', '!']);
     let payload = rest.split('*').next().unwrap_or(rest);
@@ -229,7 +236,10 @@ fn gga_has_position(text: &str) -> bool {
     let lat = fields.next().unwrap_or("").trim();
     let _ns = fields.next();
     let lon = fields.next().unwrap_or("").trim();
-    !lat.is_empty() && !lon.is_empty()
+    let _ew = fields.next();
+    let quality = fields.next().unwrap_or("").trim();
+    let quality_ok = quality.parse::<u8>().ok().is_some_and(|q| q > 0);
+    !lat.is_empty() && !lon.is_empty() && quality_ok
 }
 
 fn merge_dop(dst: &mut Dop, src: Dop) {
@@ -259,22 +269,40 @@ mod tests {
         assert!(state.last_gga.is_none());
         apply_event(
             &mut state,
-            ParseEvent::Sentence("$GNGGA,123519,3116.0997,N,12132.9704,E,1,08,1.0,10.0,M,0.0,M,,*00".into()),
+            ParseEvent::Sentence(
+                "$GNGGA,123519,3116.0997,N,12132.9704,E,1,08,1.0,10.0,M,0.0,M,,*00".into(),
+            ),
         );
         let kept = state.last_gga.as_ref().unwrap();
         assert!(kept.sentence.starts_with("$GNGGA"));
-        apply_event(
-            &mut state,
-            ParseEvent::Sentence("$GNGGA,,,,,,,,*6A".into()),
-        );
+        apply_event(&mut state, ParseEvent::Sentence("$GNGGA,,,,,,,,*6A".into()));
         assert!(
-            state.last_gga.as_ref().unwrap().sentence.starts_with("$GNGGA,123519"),
+            state
+                .last_gga
+                .as_ref()
+                .unwrap()
+                .sentence
+                .starts_with("$GNGGA,123519"),
             "无经纬度的 GGA 不应覆盖上一条有效语句"
         );
+        apply_event(&mut state, ParseEvent::Sentence("$你GGA,1,2*00".into()));
+        assert!(
+            state
+                .last_gga
+                .as_ref()
+                .unwrap()
+                .sentence
+                .starts_with("$GNGGA,123519")
+        );
         apply_event(
             &mut state,
-            ParseEvent::Sentence("$你GGA,1,2*00".into()),
+            ParseEvent::Sentence(
+                "$GNGGA,123520,3116.0997,N,12132.9704,E,0,08,1.0,10.0,M,0.0,M,,*00".into(),
+            ),
         );
-        assert!(state.last_gga.as_ref().unwrap().sentence.starts_with("$GNGGA,123519"));
+        assert!(
+            state.last_gga.as_ref().unwrap().sentence.contains(",E,1,"),
+            "quality=0 的 GGA 不能覆盖有效语句，也不能上报给 NTRIP"
+        );
     }
 }

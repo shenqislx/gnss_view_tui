@@ -40,6 +40,7 @@ use crate::recorder::Recorder;
 // 对外导出：扩展接缝与私有 crate 需要的类型。
 pub use config::Cli;
 pub use ext::{EventObserver, Screen, UiExt};
+pub use ntrip::{NtripControl, NtripSnapshot, NtripSwitch};
 pub use source::TxCommand;
 
 /// 只读数据模型与解析事件（供扩展实现读取）。
@@ -67,7 +68,9 @@ pub fn run(
 ) -> Result<()> {
     // 串口模式必须指定端口（否则提示使用 --demo）。
     if matches!(cli.source(), Source::Serial) && cli.port.is_none() {
-        bail!("未指定串口。请用 --port <设备> 指定，或使用 --demo 体验演示，或 --replay <文件> 回放。");
+        bail!(
+            "未指定串口。请用 --port <设备> 指定，或使用 --demo 体验演示，或 --replay <文件> 回放。"
+        );
     }
 
     // 加载地面真值（Ground Truth）：有效则作为固定参考点，否则回退首点。
@@ -96,10 +99,7 @@ pub fn run(
     if let Some(cfg) = &ntrip_cfg {
         let summary = cfg.summary();
         if matches!(cli.source(), Source::Serial) {
-            app_state.push_log(
-                crate::model::LogKind::Info,
-                format!("{summary}，按 n 开启"),
-            );
+            app_state.push_log(crate::model::LogKind::Info, format!("{summary}，按 n 开启"));
         } else {
             app_state.push_log(
                 crate::model::LogKind::Info,
@@ -183,7 +183,10 @@ pub fn run(
     let ntrip_unavailable = if ntrip_switch.is_some() {
         None
     } else if matches!(cli.source(), Source::Serial) {
-        Some("未配置 NTRIP（在 config.json 设置 ntrip_path，示例见 data/ntrip.example.json）".to_string())
+        Some(
+            "未配置 NTRIP（在 config.json 设置 ntrip_path，示例见 data/ntrip.example.json）"
+                .to_string(),
+        )
     } else {
         Some("NTRIP 仅在实时串口模式下可用".to_string())
     };

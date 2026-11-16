@@ -94,12 +94,10 @@ pub fn spawn_serial(
                             let _ = port.flush();
                         }
                         TxCommand::DtrReset { low_ms } => {
-                            let r = port
-                                .write_data_terminal_ready(false)
-                                .and_then(|_| {
-                                    thread::sleep(Duration::from_millis(low_ms));
-                                    port.write_data_terminal_ready(true)
-                                });
+                            let r = port.write_data_terminal_ready(false).and_then(|_| {
+                                thread::sleep(Duration::from_millis(low_ms));
+                                port.write_data_terminal_ready(true)
+                            });
                             if let Ok(mut s) = state.lock() {
                                 match r {
                                     Ok(_) => s.push_log(
@@ -327,4 +325,3 @@ fn wait_or_stop(running: &Arc<AtomicBool>, dur: Duration) -> bool {
     }
     !running.load(Ordering::Relaxed)
 }
-

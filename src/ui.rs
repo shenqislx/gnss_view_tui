@@ -72,18 +72,30 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
     let st = &state.stats;
     let uptime = (Local::now() - st.started).num_seconds().max(0);
     let conn = if st.connected {
-        Span::styled(" ● 已连接 ", Style::default().fg(Color::Black).bg(Color::Green))
+        Span::styled(
+            " ● 已连接 ",
+            Style::default().fg(Color::Black).bg(Color::Green),
+        )
     } else {
-        Span::styled(" ○ 未连接 ", Style::default().fg(Color::White).bg(Color::Red))
+        Span::styled(
+            " ○ 未连接 ",
+            Style::default().fg(Color::White).bg(Color::Red),
+        )
     };
     let rec = match &st.recording_path {
-        Some(_) => Span::styled(" ⏺ 落盘中 ", Style::default().fg(Color::Black).bg(Color::Yellow)),
+        Some(_) => Span::styled(
+            " ⏺ 落盘中 ",
+            Style::default().fg(Color::Black).bg(Color::Yellow),
+        ),
         None => Span::styled(" 无落盘 ", Style::default().fg(Color::Gray)),
     };
 
     let lines = vec![
         Line::from(vec![
-            Span::styled(" GNSS 监控 ", Style::default().fg(Color::Black).bg(Color::Cyan).bold()),
+            Span::styled(
+                " GNSS 监控 ",
+                Style::default().fg(Color::Black).bg(Color::Cyan).bold(),
+            ),
             Span::raw(" "),
             conn,
             Span::raw(" "),
@@ -92,7 +104,10 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
             ntrip_badge(&state.ntrip),
         ]),
         Line::from(vec![
-            Span::styled(format!(" 源: {}", st.source_label), Style::default().fg(Color::White)),
+            Span::styled(
+                format!(" 源: {}", st.source_label),
+                Style::default().fg(Color::White),
+            ),
             Span::raw("  "),
             Span::styled(
                 format!(
@@ -113,10 +128,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
 
 fn ntrip_badge(ntrip: &crate::model::NtripStats) -> Span<'static> {
     match ntrip.status {
-        NtripStatus::Off => Span::styled(
-            " NTRIP:关(n) ",
-            Style::default().fg(Color::DarkGray),
-        ),
+        NtripStatus::Off => Span::styled(" NTRIP:关(n) ", Style::default().fg(Color::DarkGray)),
         NtripStatus::Connecting => Span::styled(
             " ○ NTRIP 连接中 ",
             Style::default().fg(Color::Black).bg(Color::Yellow),
@@ -169,7 +181,11 @@ fn render_body(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let left = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(9), Constraint::Length(8), Constraint::Min(3)])
+        .constraints([
+            Constraint::Length(9),
+            Constraint::Length(8),
+            Constraint::Min(3),
+        ])
         .split(cols[0]);
 
     render_pvt(frame, left[0], state);
@@ -199,11 +215,7 @@ fn render_pvt(frame: &mut Frame, area: Rect, state: &AppState) {
         _ => "—".to_string(),
     };
 
-    let mut lines = vec![
-        kv("时间", &time),
-        kv("纬度", &lat),
-        kv("经度", &lon),
-    ];
+    let mut lines = vec![kv("时间", &time), kv("纬度", &lat), kv("经度", &lon)];
     // 高度：差距为零时合并展示；否则分别展示海拔高与椭球高。
     if pvt.has_separation() {
         lines.push(kv("海拔", &fmt_opt(&pvt.altitude, 1, " m")));
@@ -260,7 +272,10 @@ fn render_dop(frame: &mut Frame, area: Rect, state: &AppState) {
             Style::default().fg(Color::Green).bold(),
         ),
         Span::styled("  定位: ", Style::default().fg(Color::Gray)),
-        Span::styled(state.pvt.fix_type_text(), Style::default().fg(Color::Yellow)),
+        Span::styled(
+            state.pvt.fix_type_text(),
+            Style::default().fg(Color::Yellow),
+        ),
     ]));
     frame.render_widget(info, rows[3]);
 }
@@ -319,7 +334,10 @@ fn render_sat_summary(frame: &mut Frame, area: Rect, state: &AppState) {
                 format!(" {:<8}", sys.name()),
                 Style::default().fg(system_color(sys)).bold(),
             ),
-            Span::styled(format!("可见 {vis:>2}  ", ), Style::default().fg(Color::Gray)),
+            Span::styled(
+                format!("可见 {vis:>2}  ",),
+                Style::default().fg(Color::Gray),
+            ),
             Span::styled(format!("在用 {used:>2}"), Style::default().fg(Color::Green)),
         ])));
     }
@@ -585,7 +603,10 @@ fn render_curve(frame: &mut Frame, area: Rect, state: &AppState) {
 
     // 标题即图例：窗口信息 + 各模块名（按其折线颜色着色）。
     let mut title_spans = vec![Span::styled(
-        format!(" CPU Load: Time Cost (ms) 窗口{} +/- │", state.curve_capacity),
+        format!(
+            " CPU Load: Time Cost (ms) 窗口{} +/- │",
+            state.curve_capacity
+        ),
         Style::default().fg(Color::Cyan).bold(),
     )];
     for (i, name) in prof.names.iter().enumerate() {
@@ -612,12 +633,7 @@ fn render_curve(frame: &mut Frame, area: Rect, state: &AppState) {
     let series_points: Vec<Vec<(f64, f64)>> = prof
         .series
         .iter()
-        .map(|s| {
-            s.iter()
-                .enumerate()
-                .map(|(i, v)| (i as f64, *v))
-                .collect()
-        })
+        .map(|s| s.iter().enumerate().map(|(i, v)| (i as f64, *v)).collect())
         .collect();
 
     let x_max = (prof.len() - 1) as f64;
@@ -678,10 +694,7 @@ fn render_pos_bias(frame: &mut Frame, area: Rect, state: &AppState) {
             "GT:有效(配置)",
             Style::default().fg(Color::LightGreen).bold(),
         ),
-        Some(_) => Span::styled(
-            "GT:无效→首点",
-            Style::default().fg(Color::Yellow).bold(),
-        ),
+        Some(_) => Span::styled("GT:无效→首点", Style::default().fg(Color::Yellow).bold()),
         None => Span::styled("GT:待定", Style::default().fg(Color::DarkGray)),
     };
     let title_spans = vec![
@@ -711,7 +724,12 @@ fn render_pos_bias(frame: &mut Frame, area: Rect, state: &AppState) {
     let (plot, info) = if inner.height >= 4 {
         (
             Rect::new(inner.x, inner.y, inner.width, inner.height - 1),
-            Some(Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1)),
+            Some(Rect::new(
+                inner.x,
+                inner.y + inner.height - 1,
+                inner.width,
+                1,
+            )),
         )
     } else {
         (inner, None)
@@ -723,12 +741,15 @@ fn render_pos_bias(frame: &mut Frame, area: Rect, state: &AppState) {
         _ => None,
     };
     if let Some(area) = info {
-        frame.render_widget(Paragraph::new(pos_bias_readout(current, E_COLOR, N_COLOR, U_COLOR)), area);
+        frame.render_widget(
+            Paragraph::new(pos_bias_readout(current, E_COLOR, N_COLOR, U_COLOR)),
+            area,
+        );
     }
 
     if pb.len() < 2 {
-        let p = Paragraph::new("   等待定位数据计算误差…")
-            .style(Style::default().fg(Color::DarkGray));
+        let p =
+            Paragraph::new("   等待定位数据计算误差…").style(Style::default().fg(Color::DarkGray));
         frame.render_widget(p, plot);
         return;
     }
@@ -814,9 +835,15 @@ fn pos_bias_readout(
         Span::styled("U ", lbl(u_color)),
         Span::styled(format!("{u:+.3} m  "), val),
         Span::styled("│ 平面 ", Style::default().fg(Color::Gray)),
-        Span::styled(format!("{h:.3} m  "), Style::default().fg(Color::LightCyan).bold()),
+        Span::styled(
+            format!("{h:.3} m  "),
+            Style::default().fg(Color::LightCyan).bold(),
+        ),
         Span::styled("3D ", Style::default().fg(Color::Gray)),
-        Span::styled(format!("{d3:.3} m"), Style::default().fg(Color::LightCyan).bold()),
+        Span::styled(
+            format!("{d3:.3} m"),
+            Style::default().fg(Color::LightCyan).bold(),
+        ),
     ])
 }
 
@@ -868,13 +895,30 @@ fn render_console(frame: &mut Frame, area: Rect, app: &App, state: &AppState) {
 fn render_input(frame: &mut Frame, area: Rect, app: &App) {
     let line = match app.mode {
         Mode::Insert => Line::from(vec![
-            Span::styled(" 输入 ", Style::default().fg(Color::Black).bg(Color::LightCyan).bold()),
-            Span::styled(format!(" TX[{}]> ", app.line_ending.label()), Style::default().fg(Color::LightCyan)),
+            Span::styled(
+                " 输入 ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::LightCyan)
+                    .bold(),
+            ),
+            Span::styled(
+                format!(" TX[{}]> ", app.line_ending.label()),
+                Style::default().fg(Color::LightCyan),
+            ),
             Span::raw(&app.input),
-            Span::styled("▏", Style::default().fg(Color::White).add_modifier(Modifier::SLOW_BLINK)),
+            Span::styled(
+                "▏",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::SLOW_BLINK),
+            ),
         ]),
         Mode::Normal => Line::from(vec![
-            Span::styled(" 命令 ", Style::default().fg(Color::Black).bg(Color::Gray).bold()),
+            Span::styled(
+                " 命令 ",
+                Style::default().fg(Color::Black).bg(Color::Gray).bold(),
+            ),
             Span::styled(
                 " i:发送  n:NTRIP  s:天空图  t:轨迹  p:位置偏差  d:DTR  f:星座  ←→:翻页  +/-:窗口  c:清屏  ?:帮助  q:退出",
                 Style::default().fg(Color::Gray),
@@ -893,7 +937,10 @@ fn render_help(frame: &mut Frame, area: Rect) {
 
     frame.render_widget(ratatui::widgets::Clear, popup);
     let text = vec![
-        Line::from(Span::styled("  GNSS 监控 TUI — 帮助", Style::default().fg(Color::Cyan).bold())),
+        Line::from(Span::styled(
+            "  GNSS 监控 TUI — 帮助",
+            Style::default().fg(Color::Cyan).bold(),
+        )),
         Line::raw(""),
         Line::raw("  q / Ctrl+C     退出程序"),
         Line::raw("  i              进入输入模式（发送 TX 命令）"),
@@ -914,7 +961,10 @@ fn render_help(frame: &mut Frame, area: Rect) {
         Line::raw("  l              切换 TX 换行符 (CRLF/LF/无)"),
         Line::raw("  ?              显示/隐藏本帮助"),
         Line::raw(""),
-        Line::from(Span::styled("  按任意键关闭", Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            "  按任意键关闭",
+            Style::default().fg(Color::DarkGray),
+        )),
     ];
     let p = Paragraph::new(text)
         .alignment(Alignment::Left)
@@ -987,7 +1037,14 @@ fn render_skyplot(frame: &mut Frame, area: Rect, state: &AppState) {
         }
     }
     // 天顶 + 方位基准线（N/E/S/W 方向的引导点）。
-    put_ch_checked(buf, inner, cx.round() as i32, cy.round() as i32, '+', grid_style);
+    put_ch_checked(
+        buf,
+        inner,
+        cx.round() as i32,
+        cy.round() as i32,
+        '+',
+        grid_style,
+    );
 
     // 方位标签 N/E/S/W。
     let label_style = Style::default().fg(Color::Gray).bold();
@@ -1032,14 +1089,7 @@ fn render_skyplot(frame: &mut Frame, area: Rect, state: &AppState) {
             put_str_checked(buf, inner, x, y, sys.tag(), mstyle);
             // PRN 紧随其后（空间允许时）。
             let prn = format!("{:02}", sat.prn);
-            put_str_checked(
-                buf,
-                inner,
-                x + 1,
-                y,
-                &prn,
-                Style::default().fg(base),
-            );
+            put_str_checked(buf, inner, x + 1, y, &prn, Style::default().fg(base));
         } else {
             put_ch_checked(
                 buf,
@@ -1047,7 +1097,9 @@ fn render_skyplot(frame: &mut Frame, area: Rect, state: &AppState) {
                 x,
                 y,
                 '∘',
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
             );
         }
     }
@@ -1096,7 +1148,10 @@ fn render_trajectory(frame: &mut Frame, area: Rect, state: &AppState) {
                 Style::default().fg(Color::White),
             ),
             Span::styled("   比例尺 全宽 ", Style::default().fg(Color::Gray)),
-            Span::styled(fmt_dist(full_w), Style::default().fg(Color::LightCyan).bold()),
+            Span::styled(
+                fmt_dist(full_w),
+                Style::default().fg(Color::LightCyan).bold(),
+            ),
             Span::styled("  ◉当前 S起点", Style::default().fg(Color::DarkGray)),
         ])),
         info_area,
@@ -1130,7 +1185,14 @@ fn render_trajectory(frame: &mut Frame, area: Rect, state: &AppState) {
             xx += 2;
         }
     }
-    put_ch_checked(buf, plot, cx.round() as i32, cy.round() as i32, '+', Style::default().fg(Color::Gray));
+    put_ch_checked(
+        buf,
+        plot,
+        cx.round() as i32,
+        cy.round() as i32,
+        '+',
+        Style::default().fg(Color::Gray),
+    );
 
     // 经纬度米偏移 -> 屏幕坐标。
     let to_xy = |lat: f64, lon: f64| -> (i32, i32) {
@@ -1153,7 +1215,9 @@ fn render_trajectory(frame: &mut Frame, area: Rect, state: &AppState) {
                 x,
                 y,
                 '◉',
-                Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::LightGreen)
+                    .add_modifier(Modifier::BOLD),
             );
         } else if is_first {
             put_ch_checked(
@@ -1211,16 +1275,19 @@ fn put_str_checked(buf: &mut Buffer, inner: Rect, x: i32, y: i32, text: &str, st
 
 fn kv(key: &str, value: &str) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!(" {key:<5}", ), Style::default().fg(Color::Gray)),
+        Span::styled(format!(" {key:<5}",), Style::default().fg(Color::Gray)),
         Span::styled(value.to_string(), Style::default().fg(Color::White).bold()),
     ])
 }
 
 fn kv2(k1: &str, v1: &str, k2: &str, v2: &str) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!(" {k1:<5}", ), Style::default().fg(Color::Gray)),
-        Span::styled(format!("{v1:<12}"), Style::default().fg(Color::White).bold()),
-        Span::styled(format!(" {k2:<5}", ), Style::default().fg(Color::Gray)),
+        Span::styled(format!(" {k1:<5}",), Style::default().fg(Color::Gray)),
+        Span::styled(
+            format!("{v1:<12}"),
+            Style::default().fg(Color::White).bold(),
+        ),
+        Span::styled(format!(" {k2:<5}",), Style::default().fg(Color::Gray)),
         Span::styled(v2.to_string(), Style::default().fg(Color::Yellow).bold()),
     ])
 }
@@ -1312,8 +1379,8 @@ mod tests {
             for x in 0..area.width {
                 let cell = &buf[(x, y)];
                 let st = cell.style();
-                let is_digit = cell.symbol().chars().all(|c| c.is_ascii_digit())
-                    && !cell.symbol().is_empty();
+                let is_digit =
+                    cell.symbol().chars().all(|c| c.is_ascii_digit()) && !cell.symbol().is_empty();
                 if is_digit
                     && st.fg == Some(Color::LightGreen)
                     && st.add_modifier.contains(Modifier::BOLD)
@@ -1412,7 +1479,8 @@ mod tests {
         );
 
         assert!(
-            idle.iter().all(|(s, st)| s == "░" && style_is_unused_bar(*st)),
+            idle.iter()
+                .all(|(s, st)| s == "░" && style_is_unused_bar(*st)),
             "未用柱应整柱都是同一种浅灰 ░，不能再叠深浅不同的顶边"
         );
         // CN0=50 的残量不足半格：未用柱舍去这一行，底边以下的满格仍与在用柱对齐。
@@ -1441,7 +1509,6 @@ mod tests {
             }),
             "弱信号在用星的 CN0 数字不应按强度变红"
         );
-
     }
 
     #[test]
@@ -1486,7 +1553,10 @@ mod tests {
         // 仰角/方位标签（ASCII 数字）
         assert!(text.contains("123"), "应显示方位角标签");
         // PVT 高度分开展示与速度单位（CJK 宽字符在缓冲区后跟空格，按单字符校验）
-        assert!(text.contains('椭') && text.contains('差'), "差距非零应分开展示椭球高");
+        assert!(
+            text.contains('椭') && text.contains('差'),
+            "差距非零应分开展示椭球高"
+        );
         assert!(text.contains("m/s"), "速度应换算为 m/s");
         assert!(text.contains("NTRIP"), "顶栏应提示 NTRIP 开关");
     }
@@ -1692,11 +1762,23 @@ mod tests {
 
         let text = buffer_text(&term);
         // CJK 宽字符在测试缓冲区后跟空格，按单字符校验。
-        assert!(text.contains('位') && text.contains('偏'), "应显示位置偏差标题");
-        assert!(text.contains('有') && text.contains('效'), "有效配置 GT 应标注 valid");
+        assert!(
+            text.contains('位') && text.contains('偏'),
+            "应显示位置偏差标题"
+        );
+        assert!(
+            text.contains('有') && text.contains('效'),
+            "有效配置 GT 应标注 valid"
+        );
         // 实时读数行：当前 E/N/U 数值 + 平面/3D 合成误差。
-        assert!(text.contains('当') && text.contains('前'), "应显示实时读数行");
-        assert!(text.contains('平') && text.contains('面'), "应显示平面合成误差");
+        assert!(
+            text.contains('当') && text.contains('前'),
+            "应显示实时读数行"
+        );
+        assert!(
+            text.contains('平') && text.contains('面'),
+            "应显示平面合成误差"
+        );
         assert!(text.contains("3D"), "应显示 3D 合成误差");
     }
 
@@ -1719,7 +1801,10 @@ mod tests {
         drop(g);
 
         let text = buffer_text(&term);
-        assert!(text.contains('首') && text.contains('点'), "回退 GT 应标注 首点");
+        assert!(
+            text.contains('首') && text.contains('点'),
+            "回退 GT 应标注 首点"
+        );
     }
 
     #[test]
@@ -1739,7 +1824,10 @@ mod tests {
         drop(guard);
 
         let text = buffer_text(&terminal);
-        assert!(text.contains('高') && text.contains('度'), "差距为零应合并为单一高度");
+        assert!(
+            text.contains('高') && text.contains('度'),
+            "差距为零应合并为单一高度"
+        );
         assert!(!text.contains('椭'), "差距为零不应出现椭球高行");
     }
 }

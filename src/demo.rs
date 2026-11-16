@@ -78,8 +78,7 @@ fn gsv_block(talker: &str, t: f64, total: u16, prns: &[u16], phase: f64) -> Stri
             let elev = 20 + (idx as u16 * 7) % 60;
             let az = (idx as u16 * 47 + (t as u16 * 2)) % 360;
             // CN0 在 28~48 之间起伏，不同卫星相位不同。
-            let cn0 =
-                38.0 + ((t * 0.3 + phase + idx as f64 * 0.9).sin()) * 9.0;
+            let cn0 = 38.0 + ((t * 0.3 + phase + idx as f64 * 0.9).sin()) * 9.0;
             let cn0 = cn0.clamp(20.0, 52.0) as u16;
             body.push_str(&format!(",{prn:02},{elev:02},{az:03},{cn0:02}"));
         }
@@ -115,7 +114,10 @@ mod tests {
         let mut out = Vec::new();
         parser.feed(data.as_bytes(), &mut out);
         // 不应有校验错误，且应包含定位与卫星事件。
-        assert!(!out.iter().any(|e| matches!(e, ParseEvent::Error(_))), "演示数据校验和应正确");
+        assert!(
+            !out.iter().any(|e| matches!(e, ParseEvent::Error(_))),
+            "演示数据校验和应正确"
+        );
         assert!(out.iter().any(|e| matches!(e, ParseEvent::Fix { .. })));
         assert!(out.iter().any(|e| matches!(e, ParseEvent::Satellites(_))));
         assert!(out.iter().any(|e| matches!(e, ParseEvent::Dop { .. })));

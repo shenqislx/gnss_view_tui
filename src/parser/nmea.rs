@@ -143,7 +143,10 @@ fn parse_profile(text: &str, out: &mut Vec<ParseEvent>) {
 }
 
 fn f(fields: &[&str], i: usize) -> Option<String> {
-    fields.get(i).map(|s| s.to_string()).filter(|s| !s.is_empty())
+    fields
+        .get(i)
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn parse_f64(fields: &[&str], i: usize) -> Option<f64> {
@@ -165,9 +168,10 @@ fn parse_coord(value: Option<&&str>, hemi: Option<&&str>) -> Option<f64> {
     let min = raw - deg * 100.0;
     let mut dec = deg + min / 60.0;
     if let Some(h) = hemi
-        && matches!(*h, "S" | "W") {
-            dec = -dec;
-        }
+        && matches!(*h, "S" | "W")
+    {
+        dec = -dec;
+    }
     Some(dec)
 }
 
@@ -185,6 +189,8 @@ fn parse_gga(fields: &[&str], text: &str, out: &mut Vec<ParseEvent>) {
         hdop: parse_f64(fields, 8),
         altitude: parse_f64(fields, 9),
         geoid_sep: parse_f64(fields, 11),
+        dgps_age: parse_f64(fields, 13),
+        dgps_station: f(fields, 14),
     };
     out.push(event);
     out.push(ParseEvent::Sentence(text.to_string()));
@@ -222,9 +228,10 @@ fn parse_gsa(fields: &[&str], text: &str, out: &mut Vec<ParseEvent>) {
     let mut used = Vec::new();
     for i in 3..15 {
         if let Some(prn) = parse_u(fields, i)
-            && prn != 0 {
-                used.push((GnssSystem::Unknown, prn));
-            }
+            && prn != 0
+        {
+            used.push((GnssSystem::Unknown, prn));
+        }
     }
     let dop = Dop {
         pdop: parse_f64(fields, 15),
@@ -248,18 +255,19 @@ fn parse_gsv(talker: &str, fields: &[&str], text: &str, out: &mut Vec<ParseEvent
     while i + 3 < fields.len() {
         let prn = parse_u(fields, i);
         if let Some(prn) = prn
-            && prn != 0 {
-                sats.push(Satellite {
-                    system: Some(system),
-                    prn,
-                    elevation: parse_u(fields, i + 1),
-                    azimuth: parse_u(fields, i + 2),
-                    cn0: parse_u(fields, i + 3),
-                    used_in_fix: false,
-                    last_seen: Some(now),
-                    trail: Default::default(),
-                });
-            }
+            && prn != 0
+        {
+            sats.push(Satellite {
+                system: Some(system),
+                prn,
+                elevation: parse_u(fields, i + 1),
+                azimuth: parse_u(fields, i + 2),
+                cn0: parse_u(fields, i + 3),
+                used_in_fix: false,
+                last_seen: Some(now),
+                trail: Default::default(),
+            });
+        }
         i += 4;
     }
     if !sats.is_empty() {
@@ -286,9 +294,13 @@ mod tests {
         let fix = events
             .iter()
             .find_map(|e| match e {
-                ParseEvent::Fix { latitude, longitude, altitude, sats_used, .. } => {
-                    Some((*latitude, *longitude, *altitude, *sats_used))
-                }
+                ParseEvent::Fix {
+                    latitude,
+                    longitude,
+                    altitude,
+                    sats_used,
+                    ..
+                } => Some((*latitude, *longitude, *altitude, *sats_used)),
                 _ => None,
             })
             .expect("应解析出 Fix");
@@ -322,7 +334,11 @@ mod tests {
         let (alt, sep) = events
             .iter()
             .find_map(|e| match e {
-                ParseEvent::Fix { altitude, geoid_sep, .. } => Some((*altitude, *geoid_sep)),
+                ParseEvent::Fix {
+                    altitude,
+                    geoid_sep,
+                    ..
+                } => Some((*altitude, *geoid_sep)),
                 _ => None,
             })
             .expect("应解析出 Fix");
@@ -333,8 +349,46 @@ mod tests {
     }
 
     #[test]
+    fn parses_gga_dgps_age_and_station() {
+        let body = "GNGGA,123519,3116.0997,N,12132.9704,E,2,08,1.0,10.0,M,0.0,M,1.5,0001";
+        let cs = body.bytes().fold(0u8, |a, b| a ^ b);
+        let events = collect(&format!("${body}*{cs:02X}\r\n"));
+        let (age, station) = events
+            .iter()
+            .find_map(|e| match e {
+                ParseEvent::Fix {
+                    dgps_age,
+                    dgps_station,
+                    ..
+                } => Some((*dgps_age, dgps_station.clone())),
+                _ => None,
+            })
+            .expect("应解析出 Fix");
+        assert_eq!(age, Some(1.5));
+        assert_eq!(station.as_deref(), Some("0001"));
+
+        let empty = "GNGGA,123519,3116.0997,N,12132.9704,E,2,08,1.0,10.0,M,0.0,M,0,0000";
+        let cs = empty.bytes().fold(0u8, |a, b| a ^ b);
+        let events = collect(&format!("${empty}*{cs:02X}\r\n"));
+        let (age, station) = events
+            .iter()
+            .find_map(|e| match e {
+                ParseEvent::Fix {
+                    dgps_age,
+                    dgps_station,
+                    ..
+                } => Some((*dgps_age, dgps_station.clone())),
+                _ => None,
+            })
+            .expect("应解析出显式零值");
+        assert_eq!(age, Some(0.0), "显式 0 不能与空字段混淆");
+        assert_eq!(station.as_deref(), Some("0000"));
+    }
+
+    #[test]
     fn parses_prof_line() {
-        let events = collect("INFO->PROF(us): PE 100950  MOT 3131  ND 81104  PRT 5480  BBM 60  VIT 0\r\n");
+        let events =
+            collect("INFO->PROF(us): PE 100950  MOT 3131  ND 81104  PRT 5480  BBM 60  VIT 0\r\n");
         let samples = events
             .iter()
             .find_map(|e| match e {
@@ -354,8 +408,9 @@ mod tests {
     #[test]
     fn parses_prof_line_mixed_separators() {
         // 真实日志中 BBM/VIT 使用等号分隔。
-        let events =
-            collect("INFO->PROF(us): PE 414379  MOT 8026  ND 351050  PRT 23296  BBM=1089  VIT=0\r\n");
+        let events = collect(
+            "INFO->PROF(us): PE 414379  MOT 8026  ND 351050  PRT 23296  BBM=1089  VIT=0\r\n",
+        );
         let samples = events
             .iter()
             .find_map(|e| match e {

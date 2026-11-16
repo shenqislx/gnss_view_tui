@@ -11,7 +11,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 
 use crate::ext::{Screen, UiExt};
 use crate::model::{AppState, LogKind};
-use crate::ntrip::NtripSwitch;
+use crate::ntrip::{NtripControl, NtripSwitch};
 use crate::source::TxCommand;
 use crate::ui;
 
@@ -115,6 +115,7 @@ impl App {
     /// 注入 UI 扩展（如私有测试模式）。开源默认 bin 不调用此方法。
     pub fn with_ext(mut self, ext: Option<Box<dyn UiExt>>) -> Self {
         self.ext = ext;
+        self.bind_ntrip_ext();
         self
     }
 
@@ -122,7 +123,20 @@ impl App {
     pub fn with_ntrip(mut self, switch: Option<NtripSwitch>, unavailable: Option<String>) -> Self {
         self.ntrip = switch;
         self.ntrip_unavailable = unavailable;
+        self.bind_ntrip_ext();
         self
+    }
+
+    /// 把当前开关交给扩展。没有开关时也通知一次，扩展可以知道 NTRIP 不可用。
+    fn bind_ntrip_ext(&mut self) {
+        let Some(ext) = self.ext.as_mut() else {
+            return;
+        };
+        let control = self
+            .ntrip
+            .clone()
+            .map(|switch| NtripControl::new(switch, Arc::clone(&self.state)));
+        ext.bind_ntrip(control);
     }
 
     /// 主事件循环。
@@ -142,9 +156,10 @@ impl App {
             // 处理输入事件。
             if event::poll(Duration::from_millis(100))?
                 && let Event::Key(key) = event::read()?
-                    && key.kind == KeyEventKind::Press {
-                        self.on_key(key);
-                    }
+                && key.kind == KeyEventKind::Press
+            {
+                self.on_key(key);
+            }
         }
         Ok(())
     }
@@ -352,8 +367,8 @@ impl App {
 mod tests {
     use super::*;
     use crate::ext::EventObserver;
-    use crate::ntrip::NtripSwitch;
     use crate::model::AppState;
+    use crate::ntrip::NtripSwitch;
     use crate::parser::ParseEvent;
     use chrono::Local;
     use ratatui::Frame;
@@ -366,6 +381,7 @@ mod tests {
     struct DummyExt {
         keys: Arc<Mutex<Vec<KeyCode>>>,
         ticks: Arc<Mutex<usize>>,
+        ntrip_bound: Arc<Mutex<Option<bool>>>,
     }
 
     impl UiExt for DummyExt {
@@ -381,6 +397,9 @@ mod tests {
         }
         fn title(&self) -> &str {
             "Dummy"
+        }
+        fn bind_ntrip(&mut self, control: Option<crate::ntrip::NtripControl>) {
+            *self.ntrip_bound.lock().unwrap() = Some(control.is_some());
         }
     }
 
@@ -439,7 +458,10 @@ mod tests {
         app.on_key(key(KeyCode::Tab));
         app.on_key(key(KeyCode::Char('a')));
         app.on_key(key(KeyCode::Char('b')));
-        assert_eq!(*keys.lock().unwrap(), vec![KeyCode::Char('a'), KeyCode::Char('b')]);
+        assert_eq!(
+            *keys.lock().unwrap(),
+            vec![KeyCode::Char('a'), KeyCode::Char('b')]
+        );
     }
 
     #[test]
@@ -449,6 +471,7 @@ mod tests {
         let ext = DummyExt {
             keys: Arc::new(Mutex::new(Vec::new())),
             ticks: ticks.clone(),
+            ntrip_bound: Arc::new(Mutex::new(None)),
         };
         let mut app = make_app(Some(Box::new(ext)));
         if let Some(e) = &mut app.ext {
@@ -461,7 +484,9 @@ mod tests {
     #[test]
     fn observer_seam_is_callable() {
         let count = Arc::new(Mutex::new(0usize));
-        let obs = DummyObserver { count: count.clone() };
+        let obs = DummyObserver {
+            count: count.clone(),
+        };
         let state = AppState::new("test".into(), 60);
         obs.observe(&ParseEvent::EpochTick, Local::now(), &state);
         assert_eq!(*count.lock().unwrap(), 1);
@@ -486,6 +511,17 @@ mod tests {
         app.on_key(key(KeyCode::Char('n')));
         assert!(switch.is_enabled());
         assert_eq!(app.overlay, Overlay::Skyplot);
+    }
+
+    #[test]
+    fn extension_receives_ntrip_control() {
+        let ext = DummyExt::default();
+        let bound = Arc::clone(&ext.ntrip_bound);
+        let switch = NtripSwitch::new(false);
+        let _app = make_app(Some(Box::new(ext))).with_ntrip(Some(switch.clone()), None);
+        assert_eq!(*bound.lock().unwrap(), Some(true));
+        switch.set(true);
+        assert!(switch.is_enabled());
     }
 
     #[test]

@@ -25,7 +25,7 @@ pub struct NtripSwitch {
 }
 
 impl NtripSwitch {
-    pub(crate) fn new(enabled: bool) -> Self {
+    pub fn new(enabled: bool) -> Self {
         Self {
             enabled: Arc::new(AtomicBool::new(enabled)),
         }
@@ -37,6 +37,61 @@ impl NtripSwitch {
 
     pub fn set(&self, on: bool) {
         self.enabled.store(on, Ordering::Relaxed);
+    }
+}
+
+/// 可供 UI 扩展克隆的 NTRIP 控制与状态视图。开关与后台线程共用，状态读自 `AppState`。
+#[derive(Clone)]
+pub struct NtripControl {
+    switch: NtripSwitch,
+    state: Arc<Mutex<AppState>>,
+}
+
+/// 某一时刻的 NTRIP 健康快照。不包含账号或密码。
+#[derive(Clone, Debug, Default)]
+pub struct NtripSnapshot {
+    pub enabled: bool,
+    pub connected: bool,
+    pub status: NtripStatus,
+    pub bytes_total: u64,
+    pub bps: f64,
+    pub gga_sent: u64,
+    pub detail: String,
+}
+
+impl NtripControl {
+    pub fn new(switch: NtripSwitch, state: Arc<Mutex<AppState>>) -> Self {
+        Self { switch, state }
+    }
+
+    pub fn set_enabled(&self, on: bool) {
+        self.switch.set(on);
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.switch.is_enabled()
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.snapshot().connected
+    }
+
+    pub fn snapshot(&self) -> NtripSnapshot {
+        let Ok(state) = self.state.lock() else {
+            return NtripSnapshot {
+                enabled: self.is_enabled(),
+                ..NtripSnapshot::default()
+            };
+        };
+        NtripSnapshot {
+            enabled: self.is_enabled(),
+            connected: state.ntrip.status == NtripStatus::Connected,
+            status: state.ntrip.status,
+            bytes_total: state.ntrip.bytes_total,
+            bps: state.ntrip.bps,
+            gga_sent: state.ntrip.gga_sent,
+            detail: state.ntrip.detail.clone(),
+        }
     }
 }
 
@@ -200,8 +255,7 @@ impl Worker {
             return SessionStop::Failed(format!("发送请求失败: {e}"));
         }
 
-        let pending = match read_handshake(&mut stream, &self.running, &self.stop, &self.enabled)
-        {
+        let pending = match read_handshake(&mut stream, &self.running, &self.stop, &self.enabled) {
             Ok(body) => body,
             Err(stop) => return stop,
         };
@@ -296,7 +350,9 @@ impl Worker {
             GgaMode::Serial => {
                 let max_age = serial_gga_max_age_secs(self.cfg.gga_interval_secs);
                 let held = match self.state.lock() {
-                    Ok(guard) => classify_serial_gga(guard.last_gga.as_ref(), Local::now(), max_age),
+                    Ok(guard) => {
+                        classify_serial_gga(guard.last_gga.as_ref(), Local::now(), max_age)
+                    }
                     Err(_) => HeldGga::Missing,
                 };
                 match held {
@@ -314,9 +370,9 @@ impl Worker {
                 }
             }
         };
-        stream.write_all(sentence.as_bytes()).map_err(|e| {
-            SessionStop::Failed(format!("上报 GGA 失败: {e}"))
-        })?;
+        stream
+            .write_all(sentence.as_bytes())
+            .map_err(|e| SessionStop::Failed(format!("上报 GGA 失败: {e}")))?;
         *notice = None;
         if let Ok(mut state) = self.state.lock() {
             state.ntrip.gga_sent += 1;
@@ -560,9 +616,7 @@ fn format_fixed_gga(lat: f64, lon: f64, alt: f64, utc: DateTime<Utc>) -> String 
     let (lat_dm, ns) = nmea_lat(lat);
     let (lon_dm, ew) = nmea_lon(lon);
     let tod = utc.format("%H%M%S");
-    let body = format!(
-        "GPGGA,{tod}.00,{lat_dm},{ns},{lon_dm},{ew},1,08,1.0,{alt:.3},M,0.0,M,,"
-    );
+    let body = format!("GPGGA,{tod}.00,{lat_dm},{ns},{lon_dm},{ew},1,08,1.0,{alt:.3},M,0.0,M,,");
     let cs = body.bytes().fold(0u8, |acc, b| acc ^ b);
     format!("${body}*{cs:02X}\r\n")
 }
@@ -683,10 +737,14 @@ fn inspect_handshake(buf: &[u8]) -> Handshake {
             return Handshake::NeedMore;
         }
         if buf[pos..].starts_with(b"\r\n") {
-            return Handshake::Ready { body_start: pos + 2 };
+            return Handshake::Ready {
+                body_start: pos + 2,
+            };
         }
         if buf[pos..].starts_with(b"\n") {
-            return Handshake::Ready { body_start: pos + 1 };
+            return Handshake::Ready {
+                body_start: pos + 1,
+            };
         }
         match line_break(&buf[pos..]) {
             None => {
@@ -880,7 +938,10 @@ mod tests {
         };
         let req = build_request(&cfg);
         assert!(req.starts_with("GET /AUTO HTTP/1.0\r\n"), "{req}");
-        assert!(req.contains("Authorization: Basic dXNlcjpwYXNz\r\n"), "{req}");
+        assert!(
+            req.contains("Authorization: Basic dXNlcjpwYXNz\r\n"),
+            "{req}"
+        );
         assert!(req.ends_with("\r\n\r\n"));
     }
 
@@ -1043,7 +1104,10 @@ mod tests {
             }
             let text = String::from_utf8_lossy(&got);
             assert!(text.contains("GET /AUTO HTTP/1.0\r\n"), "{text}");
-            assert!(text.contains("Authorization: Basic dXNlcjpwYXNz\r\n"), "{text}");
+            assert!(
+                text.contains("Authorization: Basic dXNlcjpwYXNz\r\n"),
+                "{text}"
+            );
             sock.write_all(b"ICY 200 OK\r\n").unwrap();
             got.clear();
             loop {

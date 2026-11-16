@@ -217,17 +217,17 @@ impl NtripConfig {
 fn parse_ntrip_json(text: &str) -> anyhow::Result<NtripConfig> {
     let mut cfg: NtripConfig = serde_json::from_str(text)?;
     cfg.host = cfg.host.trim().to_string();
-    cfg.mountpoint = cfg
-        .mountpoint
-        .trim()
-        .trim_start_matches('/')
-        .to_string();
+    cfg.mountpoint = cfg.mountpoint.trim().trim_start_matches('/').to_string();
     cfg.username = cfg.username.trim().to_string();
     cfg.rtcm_port = cfg.rtcm_port.trim().to_string();
     if cfg.host.is_empty() {
         anyhow::bail!("host 为空");
     }
-    if cfg.host.chars().any(|c| c.is_control() || c.is_whitespace() || c == '/') {
+    if cfg
+        .host
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || c == '/')
+    {
         anyhow::bail!("host 无效");
     }
     if cfg.port == 0 {
@@ -465,10 +465,9 @@ mod tests {
 
     #[test]
     fn rtcm_baud_defaults_to_115200_and_rejects_zero() {
-        let cfg = parse_ntrip_json(
-            r#"{"host":"127.0.0.1","mountpoint":"M","rtcm_port":"/dev/ttyUSB1"}"#,
-        )
-        .unwrap();
+        let cfg =
+            parse_ntrip_json(r#"{"host":"127.0.0.1","mountpoint":"M","rtcm_port":"/dev/ttyUSB1"}"#)
+                .unwrap();
         assert_eq!(cfg.rtcm_baud, 115_200);
         let err = parse_ntrip_json(
             r#"{"host":"127.0.0.1","mountpoint":"M","rtcm_port":"/dev/ttyUSB1","rtcm_baud":0}"#,
