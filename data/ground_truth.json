@@ -1,6 +1,23 @@
 {
-  "valid": true,
-  "latitude": 31.160996718,
-  "longitude": 121.54950658,
-  "altitude": 62.338
+  "selected": 1,
+  "points": [
+    {
+      "id": 1,
+      "name": "固定站",
+      "valid": true,
+      "latitude": 31.160996718,
+      "longitude": 121.54950658,
+      "altitude": 62.338,
+      "note": "固定站自标定"
+    },
+    {
+      "id": 2,
+      "name": "NRTK",
+      "valid": true,
+      "latitude": 31.160998806780,
+      "longitude": 121.549499295793,
+      "altitude": 62.242570,
+      "note": "千寻 NRTK，模组 B 于 2026-11-10/11 的 RTK 固定解平均。WGS84 椭球高，未做天线高改正。来源 RoofTop_HQ_20250909/NRTK_QXWZ。"
+    }
+  ]
 }

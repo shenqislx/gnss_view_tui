@@ -689,9 +689,9 @@ fn render_pos_bias(frame: &mut Frame, area: Rect, state: &AppState) {
     let pb = &state.pos_bias;
 
     // 标题：窗口 + GT 有效性 + 彩色图例（E/N/U）。
-    let gt_span = match state.ground_truth {
+    let gt_span = match state.ground_truth.as_ref() {
         Some(gt) if gt.valid => Span::styled(
-            "GT:有效(配置)",
+            format!("GT:{}", gt.short_label()),
             Style::default().fg(Color::LightGreen).bold(),
         ),
         Some(_) => Span::styled("GT:无效→首点", Style::default().fg(Color::Yellow).bold()),
@@ -1739,12 +1739,7 @@ mod tests {
     fn renders_pos_bias_series_with_gt_validity() {
         use crate::model::GroundTruth;
         let mut state = AppState::new("test".into(), 60);
-        state.ground_truth = Some(GroundTruth {
-            lat: 31.23,
-            lon: 121.47,
-            alt: 10.0,
-            valid: true,
-        });
+        state.ground_truth = Some(GroundTruth::configured(None, "", 31.23, 121.47, 10.0));
         // 多个历元的偏差采样，使曲线可绘制。
         for i in 0..10 {
             let d = i as f64 * 1e-6;

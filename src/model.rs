@@ -336,13 +336,65 @@ impl Profile {
 }
 
 /// 地面真值（Ground Truth）：用于计算定位误差的固定参考点。
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// 精度统计和位置偏差都只使用这一份已选定的坐标。`id` / `name` 记录它来自
+/// 地面真值文件中的哪一组；旧式单点和首点回退没有编号。
+#[derive(Clone, Debug, PartialEq)]
 pub struct GroundTruth {
     pub lat: f64,
     pub lon: f64,
     pub alt: f64,
     /// true：来自有效配置；false：回退为首个收到的定位点。
     pub valid: bool,
+    /// 配置编号。`None` 表示旧式单点或首点回退。
+    pub id: Option<u32>,
+    /// 配置名称，如“固定站”“NRTK”。
+    pub name: String,
+}
+
+impl GroundTruth {
+    /// 有效配置点。精度统计只接受 `valid == true` 的点。
+    pub fn configured(
+        id: Option<u32>,
+        name: impl Into<String>,
+        lat: f64,
+        lon: f64,
+        alt: f64,
+    ) -> Self {
+        Self {
+            lat,
+            lon,
+            alt,
+            valid: true,
+            id,
+            name: name.into(),
+        }
+    }
+
+    /// 没有有效配置时，用首个定位点作图，不把它当成绝对精度基准。
+    pub fn fallback(lat: f64, lon: f64, alt: f64) -> Self {
+        Self {
+            lat,
+            lon,
+            alt,
+            valid: false,
+            id: None,
+            name: String::new(),
+        }
+    }
+
+    /// 界面上的短标签。未编号的有效配置仍显示“有效(配置)”。
+    pub fn short_label(&self) -> String {
+        if !self.valid {
+            return "无效→首点".to_string();
+        }
+        match (self.id, self.name.as_str()) {
+            (Some(id), name) if !name.is_empty() => format!("#{id} {name}"),
+            (Some(id), _) => format!("#{id}"),
+            (_, name) if !name.is_empty() => name.to_string(),
+            _ => "有效(配置)".to_string(),
+        }
+    }
 }
 
 /// 位置偏差时间序列（ENU，单位米）。相对地面真值的 东/北/天 三分量。
@@ -579,18 +631,12 @@ impl AppState {
         if !lat.is_finite() || !lon.is_finite() {
             return;
         }
-        let gt = match self.ground_truth {
-            Some(gt) => gt,
-            None => {
-                let gt = GroundTruth {
-                    lat,
-                    lon,
-                    alt: alt.unwrap_or(0.0),
-                    valid: false,
-                };
-                self.ground_truth = Some(gt);
-                gt
-            }
+        let gt = if let Some(gt) = &self.ground_truth {
+            gt.clone()
+        } else {
+            let gt = GroundTruth::fallback(lat, lon, alt.unwrap_or(0.0));
+            self.ground_truth = Some(gt.clone());
+            gt
         };
         let (e, n) = enu_offset_m(gt.lat, gt.lon, lat, lon);
         let u = alt.map(|a| a - gt.alt).unwrap_or(0.0);
@@ -733,12 +779,7 @@ mod tests {
     #[test]
     fn pos_bias_uses_configured_gt_and_enu_signs() {
         let mut s = AppState::new("t".into(), 60);
-        s.ground_truth = Some(GroundTruth {
-            lat: 31.23,
-            lon: 121.47,
-            alt: 10.0,
-            valid: true,
-        });
+        s.ground_truth = Some(GroundTruth::configured(None, "", 31.23, 121.47, 10.0));
         // 略偏北、偏东、偏高的点。
         s.push_pos_bias(31.2301, 121.4701, Some(12.5));
         let e = *s.pos_bias.east.back().unwrap();

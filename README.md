@@ -100,17 +100,20 @@ cargo build --release
 }
 ```
 
-地面真值文件支持两种格式（按扩展名自动识别）：
+地面真值文件支持编号点集、旧式单点 JSON 和纯文本（按扩展名自动识别）。位置偏差和外部精度统计都只使用被选中的那一组：
 
 ```json
-// data/ground_truth.json —— JSON 格式
+// data/ground_truth.json
 {
-  "valid": true,
-  "latitude": 31.160996718,
-  "longitude": 121.54950658,
-  "altitude": 62.338
+  "selected": 1,
+  "points": [
+    {"id": 1, "name": "固定站", "valid": true, "latitude": 31.160996718, "longitude": 121.54950658, "altitude": 62.338},
+    {"id": 2, "name": "NRTK", "valid": true, "latitude": 31.160998806780, "longitude": 121.549499295793, "altitude": 62.242570}
+  ]
 }
 ```
+
+`selected` 省略时使用编号 1（固定站）。编号不存在、重复或文件损坏时不会改用另一组。旧式单点 `{"valid": true, "latitude": ..., "longitude": ..., "altitude": ...}` 仍然可用。
 
 ```text
 # data/LLA.txt —— 纯文本，三行依次为 纬度 / 经度 / 海拔
@@ -119,7 +122,7 @@ cargo build --release
 62.338
 ```
 
-- `valid: false`（或文件缺失/解析失败）时，程序**回退为收到的第一个定位点**作为参考，标题栏标注 `GT:无效→首点`。
+- `valid: false`（或文件缺失/解析失败）时，程序**回退为收到的第一个定位点**作为参考，标题栏标注 `GT:无效→首点`。有效配置会标出编号和名称，例如 `GT:#1 固定站`。
 - 相对路径优先相对配置文件所在目录解析。
 
 ### NTRIP 配置

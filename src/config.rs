@@ -113,20 +113,61 @@ pub struct ConfigFile {
     pub ntrip_path: Option<PathBuf>,
 }
 
-/// 地面真值（Ground Truth）配置：固定参考点的经纬高。
+/// 已选定的地面真值。精度统计和位置偏差都只使用这一组坐标。
 ///
-/// 支持两种来源格式：
-/// - JSON：`{"valid": true, "latitude": .., "longitude": .., "altitude": ..}`；
-/// - 纯文本（如 `LLA.txt`）：三行分别为 纬度 / 经度 / 海拔（默认 valid=true）。
-#[derive(Clone, Copy, Debug, Deserialize)]
+/// JSON 可以是编号点集，用顶层 `selected` 选择；缺省选择编号 1。
+/// 也仍接受旧式单点 `{valid,latitude,longitude,altitude}`，以及纯文本三行 LLA。
+#[derive(Clone, Debug, PartialEq)]
 pub struct GroundTruthConfig {
+    /// 点集中的编号。旧式单点和纯文本没有编号。
+    pub id: Option<u32>,
+    /// 点名称，如“固定站”“NRTK”。
+    pub name: String,
     /// 该真值是否有效；为 false 时程序将回退为“首个定位点”。
-    #[serde(default = "default_true")]
     pub valid: bool,
     pub latitude: f64,
     pub longitude: f64,
-    #[serde(default)]
     pub altitude: f64,
+}
+
+impl GroundTruthConfig {
+    fn label(&self) -> String {
+        let coords = format!(
+            "{:.8}, {:.8}, {:.3} m",
+            self.latitude, self.longitude, self.altitude
+        );
+        match (self.id, self.name.as_str()) {
+            (Some(id), name) if !name.is_empty() => format!("#{id} {name} {coords}"),
+            (Some(id), _) => format!("#{id} {coords}"),
+            (_, name) if !name.is_empty() => format!("{name} {coords}"),
+            _ => coords,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GroundTruthDocument {
+    selected: Option<u32>,
+    points: Option<Vec<GroundTruthPoint>>,
+    #[serde(default = "default_true")]
+    valid: bool,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    #[serde(default)]
+    altitude: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct GroundTruthPoint {
+    id: u32,
+    #[serde(default)]
+    name: String,
+    #[serde(default = "default_true")]
+    valid: bool,
+    latitude: f64,
+    longitude: f64,
+    #[serde(default)]
+    altitude: f64,
 }
 
 fn default_true() -> bool {
@@ -290,25 +331,100 @@ fn parse_ground_truth(path: &Path) -> anyhow::Result<GroundTruthConfig> {
         .map(|e| e.eq_ignore_ascii_case("json"))
         .unwrap_or(false);
     if is_json {
-        Ok(serde_json::from_str(&text)?)
+        parse_ground_truth_json(&text)
     } else {
-        // 纯文本：前三行为 纬度 / 经度 / 海拔（忽略空行与 # 注释）。
-        let nums: Vec<f64> = text
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .filter_map(|l| l.parse::<f64>().ok())
-            .collect();
-        if nums.len() < 2 {
-            anyhow::bail!("地面真值文本至少需要 纬度/经度 两行数值");
-        }
-        Ok(GroundTruthConfig {
-            valid: true,
-            latitude: nums[0],
-            longitude: nums[1],
-            altitude: nums.get(2).copied().unwrap_or(0.0),
-        })
+        parse_ground_truth_text(&text)
     }
+}
+
+fn validate_lla(latitude: f64, longitude: f64, altitude: f64) -> anyhow::Result<()> {
+    if !latitude.is_finite() || !longitude.is_finite() || !altitude.is_finite() {
+        anyhow::bail!("地面真值含非有限数值");
+    }
+    if !(-90.0..=90.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
+        anyhow::bail!("地面真值经纬度超出范围");
+    }
+    Ok(())
+}
+
+/// 从编号点集中取出 `selected`。缺省为 1，且不会在编号缺失时改用其他点。
+fn parse_ground_truth_json(text: &str) -> anyhow::Result<GroundTruthConfig> {
+    let file: GroundTruthDocument = serde_json::from_str(text)?;
+    if let Some(points) = file.points {
+        if file.latitude.is_some() || file.longitude.is_some() {
+            anyhow::bail!("地面真值不能同时包含 points 和单点经纬度");
+        }
+        if points.is_empty() {
+            anyhow::bail!("地面真值 points 为空");
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for point in &points {
+            if point.id == 0 {
+                anyhow::bail!("地面真值编号必须从 1 开始");
+            }
+            if !seen.insert(point.id) {
+                anyhow::bail!("地面真值编号 {} 重复", point.id);
+            }
+            validate_lla(point.latitude, point.longitude, point.altitude)?;
+            if point.name.trim().is_empty() {
+                anyhow::bail!("地面真值编号 {} 缺少 name", point.id);
+            }
+        }
+        let selected = file.selected.unwrap_or(1);
+        let point = points
+            .into_iter()
+            .find(|point| point.id == selected)
+            .ok_or_else(|| anyhow::anyhow!("地面真值编号 {selected} 不存在，不会改用其他参考点"))?;
+        return Ok(GroundTruthConfig {
+            id: Some(point.id),
+            name: point.name.trim().to_string(),
+            valid: point.valid,
+            latitude: point.latitude,
+            longitude: point.longitude,
+            altitude: point.altitude,
+        });
+    }
+    if file.selected.is_some() {
+        anyhow::bail!("单点地面真值不能设置 selected");
+    }
+    let latitude = file
+        .latitude
+        .ok_or_else(|| anyhow::anyhow!("地面真值缺少 latitude"))?;
+    let longitude = file
+        .longitude
+        .ok_or_else(|| anyhow::anyhow!("地面真值缺少 longitude"))?;
+    validate_lla(latitude, longitude, file.altitude)?;
+    Ok(GroundTruthConfig {
+        id: None,
+        name: String::new(),
+        valid: file.valid,
+        latitude,
+        longitude,
+        altitude: file.altitude,
+    })
+}
+
+/// 纯文本：前三行为 纬度 / 经度 / 海拔（忽略空行与 # 注释）。
+fn parse_ground_truth_text(text: &str) -> anyhow::Result<GroundTruthConfig> {
+    let nums: Vec<f64> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| l.parse::<f64>().ok())
+        .collect();
+    if nums.len() < 2 {
+        anyhow::bail!("地面真值文本至少需要 纬度/经度 两行数值");
+    }
+    let altitude = nums.get(2).copied().unwrap_or(0.0);
+    validate_lla(nums[0], nums[1], altitude)?;
+    Ok(GroundTruthConfig {
+        id: None,
+        name: String::new(),
+        valid: true,
+        latitude: nums[0],
+        longitude: nums[1],
+        altitude,
+    })
 }
 
 impl Cli {
@@ -364,16 +480,17 @@ impl Cli {
         match parse_ground_truth(&resolved) {
             Ok(gt) if gt.valid => {
                 logs.push(format!(
-                    "地面真值已加载: {:.7}, {:.7}, {:.3} m ({})",
-                    gt.latitude,
-                    gt.longitude,
-                    gt.altitude,
+                    "地面真值已加载: {} ({})",
+                    gt.label(),
                     resolved.display()
                 ));
                 (Some(gt), logs)
             }
-            Ok(_) => {
-                logs.push("地面真值标记为无效 (valid=false)，将以首个定位点为参考".to_string());
+            Ok(gt) => {
+                logs.push(format!(
+                    "地面真值 {} 标记为无效 (valid=false)，将以首个定位点为参考",
+                    gt.label()
+                ));
                 (None, logs)
             }
             Err(e) => {
@@ -551,5 +668,71 @@ mod tests {
         assert!(cfg.is_none());
         assert!(logs.is_empty(), "{logs:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ground_truth_defaults_to_fixed_station_and_can_select_nrtk() {
+        let gt = parse_ground_truth_json(include_str!("../data/ground_truth.json")).unwrap();
+        assert_eq!(gt.id, Some(1));
+        assert_eq!(gt.name, "固定站");
+        assert!(gt.valid);
+        assert!((gt.latitude - 31.160996718).abs() < 1e-12);
+        assert!((gt.longitude - 121.54950658).abs() < 1e-12);
+        assert!((gt.altitude - 62.338).abs() < 1e-9);
+
+        let omitted = parse_ground_truth_json(
+            r#"{"points":[
+                {"id":1,"name":"固定站","latitude":1.0,"longitude":2.0,"altitude":3.0},
+                {"id":2,"name":"NRTK","latitude":4.0,"longitude":5.0,"altitude":6.0}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(omitted.id, Some(1));
+        assert!((omitted.latitude - 1.0).abs() < 1e-12);
+
+        let nrtk = parse_ground_truth_json(
+            r#"{"selected":2,"points":[
+                {"id":1,"name":"固定站","latitude":31.160996718,"longitude":121.54950658,"altitude":62.338},
+                {"id":2,"name":"NRTK","latitude":31.160998806780,"longitude":121.549499295793,"altitude":62.242570}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(nrtk.id, Some(2));
+        assert_eq!(nrtk.name, "NRTK");
+        assert!((nrtk.latitude - 31.160998806780).abs() < 1e-12);
+        assert!((nrtk.longitude - 121.549499295793).abs() < 1e-12);
+        assert!((nrtk.altitude - 62.242570).abs() < 1e-12);
+    }
+
+    #[test]
+    fn missing_ground_truth_id_does_not_fall_back_to_another_point() {
+        let err = parse_ground_truth_json(
+            r#"{"selected":9,"points":[{"id":1,"name":"固定站","latitude":1,"longitude":2}]}"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("不会改用其他参考点"), "{err}");
+        assert!(
+            parse_ground_truth_json(
+                r#"{"points":[
+                    {"id":1,"name":"固定站","latitude":1,"longitude":2},
+                    {"id":1,"name":"重复","latitude":3,"longitude":4}
+                ]}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_ground_truth_object_and_text_still_parse() {
+        let legacy = parse_ground_truth_json(
+            r#"{"valid":true,"latitude":31.1,"longitude":121.5,"altitude":10.0}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.id, None);
+        assert!(legacy.name.is_empty());
+        assert!(legacy.valid);
+        let text = parse_ground_truth_text("31.1\n121.5\n10\n").unwrap();
+        assert!((text.latitude - 31.1).abs() < 1e-12);
+        assert!((text.altitude - 10.0).abs() < 1e-12);
     }
 }

@@ -77,12 +77,13 @@ pub fn run(
     let (gt_config, gt_logs) = cli.load_ground_truth();
     let mut app_state = AppState::new(cli.source_label(), cli.window_clamped());
     if let Some(gt) = gt_config {
-        app_state.ground_truth = Some(crate::model::GroundTruth {
-            lat: gt.latitude,
-            lon: gt.longitude,
-            alt: gt.altitude,
-            valid: true,
-        });
+        app_state.ground_truth = Some(crate::model::GroundTruth::configured(
+            gt.id,
+            gt.name,
+            gt.latitude,
+            gt.longitude,
+            gt.altitude,
+        ));
     }
     for msg in gt_logs {
         app_state.push_log(crate::model::LogKind::Info, msg);
